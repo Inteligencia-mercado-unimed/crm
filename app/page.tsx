@@ -108,13 +108,13 @@ export default function UnimedProposalGenerator() {
             .limit(10);
           
           if (!error && supabaseHistory) {
-            setHistory(supabaseHistory.map(p => ({
+            setHistory(supabaseHistory.map((p: any) => ({
               ...p,
               proposalNumber: p.proposal_number,
               companyName: p.company_name,
               sellerName: p.seller_name,
               totalLives: p.total_lives,
-              totalValue: p.total_value,
+              total_value: p.total_value,
               discount: p.discount || 0
             })));
             return;
@@ -272,7 +272,7 @@ export default function UnimedProposalGenerator() {
           .limit(10);
         
         if (freshHistory) {
-          setHistory(freshHistory.map(p => ({
+          setHistory(freshHistory.map((p: any) => ({
             ...p,
             proposalNumber: p.proposal_number,
             companyName: p.company_name,
