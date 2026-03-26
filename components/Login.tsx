@@ -18,6 +18,12 @@ export function Login() {
     setLoading(true);
     setError(null);
 
+    if (!supabase) {
+      setError('Configuração do Supabase ausente. Verifique as variáveis de ambiente.');
+      setLoading(false);
+      return;
+    }
+
     try {
       if (isLogin) {
         const { error } = await supabase.auth.signInWithPassword({
