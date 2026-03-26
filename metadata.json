@@ -1,0 +1,5 @@
+{
+  "name": "Gerador de Propostas Unimed",
+  "description": "Gerador de propostas comerciais para planos de saúde Unimed com cálculo automático por faixa etária.",
+  "requestFramePermissions": []
+}
