@@ -4,14 +4,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { format, addDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import Image from 'next/image';
-import { 
-  Download, 
-  Printer, 
-  Plus, 
-  Minus, 
-  Building2, 
-  User, 
-  Calendar, 
+import {
+  Download,
+  Printer,
+  Plus,
+  Minus,
+  Building2,
+  User,
+  Calendar,
   FileText,
   CheckCircle2,
   Info,
@@ -75,6 +75,8 @@ export default function UnimedProposalGenerator() {
     validityDays: 20,
     discount: 0,
   });
+  const [selectedCoverages, setSelectedCoverages] = useState<string[]>([]);
+  const [selectedAccommodations, setSelectedAccommodations] = useState<string[]>([]);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSearchingCNPJ, setIsSearchingCNPJ] = useState(false);
@@ -106,7 +108,7 @@ export default function UnimedProposalGenerator() {
             .select('*')
             .order('created_at', { ascending: false })
             .limit(10);
-          
+
           if (!error && supabaseHistory) {
             setHistory(supabaseHistory.map((p: any) => ({
               ...p,
@@ -142,7 +144,7 @@ export default function UnimedProposalGenerator() {
         const result = await response.json();
         if (Array.isArray(result)) {
           setPlans(result);
-          
+
           // Initialize quantities for all unique age groups
           const uniqueAgeGroups = Array.from(new Set(result.flatMap((p: Plan) => p.ageGroups.map(ag => ag.label))));
           const initialQuantities: Record<string, number> = {};
@@ -150,6 +152,12 @@ export default function UnimedProposalGenerator() {
             initialQuantities[label as string] = 0;
           });
           setQuantities(initialQuantities);
+
+          // Initialize filters with all options selected
+          const coverages = Array.from(new Set(result.map((p: Plan) => p.coverage))) as string[];
+          const accommodations = Array.from(new Set(result.map((p: Plan) => p.accommodation))) as string[];
+          setSelectedCoverages(coverages);
+          setSelectedAccommodations(accommodations);
         }
       } catch (error) {
         console.error('Error fetching plans:', error);
@@ -224,6 +232,23 @@ export default function UnimedProposalGenerator() {
     }));
   };
 
+  const toggleFilter = (type: 'coverage' | 'accommodation', value: string) => {
+    if (type === 'coverage') {
+      setSelectedCoverages(prev =>
+        prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]
+      );
+    } else {
+      setSelectedAccommodations(prev =>
+        prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]
+      );
+    }
+  };
+
+  const filteredPlans = plans.filter(p =>
+    selectedCoverages.includes(p.coverage) &&
+    selectedAccommodations.includes(p.accommodation)
+  );
+
   const calculatePlanTotal = (plan: Plan) => {
     return plan.ageGroups.reduce((acc, group) => {
       const discountedValue = Math.round(group.value * (1 - (data.discount / 100)));
@@ -243,7 +268,7 @@ export default function UnimedProposalGenerator() {
     const element = document.getElementById('proposal-document-container');
     if (!element) return;
     setIsGenerating(true);
-    
+
     // 1. Save to history
     const historyData = {
       proposal_number: data.proposalNumber,
@@ -263,14 +288,14 @@ export default function UnimedProposalGenerator() {
       try {
         const { error } = await supabase.from('proposals').insert([historyData]);
         if (error) throw error;
-        
+
         // Refresh history from Supabase
         const { data: freshHistory } = await supabase
           .from('proposals')
           .select('*')
           .order('created_at', { ascending: false })
           .limit(10);
-        
+
         if (freshHistory) {
           setHistory(freshHistory.map((p: any) => ({
             ...p,
@@ -297,7 +322,7 @@ export default function UnimedProposalGenerator() {
     };
     localHistory.push(newProposal);
     localStorage.setItem('unimed_proposals_history', JSON.stringify(localHistory));
-    
+
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
       setHistory(localHistory.slice().reverse().slice(0, 5));
     }
@@ -309,7 +334,7 @@ export default function UnimedProposalGenerator() {
       // 3. Generate PDF
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pages = element.querySelectorAll('.proposal-page');
-      
+
       for (let i = 0; i < pages.length; i++) {
         const page = pages[i] as HTMLElement;
         const canvas = await html2canvas(page, {
@@ -317,26 +342,26 @@ export default function UnimedProposalGenerator() {
           useCORS: true,
           logging: false,
         });
-        
+
         const imgData = canvas.toDataURL('image/png');
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = pdf.internal.pageSize.getHeight();
-        
+
         if (i > 0) pdf.addPage();
         pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       }
-      
+
       pdf.save(`Proposta_Unimed_${data.proposalNumber}_${data.companyName || 'Sem_Nome'}.pdf`);
 
       // 4. Increment for next proposal
       const nextNum = (parseInt(data.proposalNumber) + 1).toString().padStart(4, '0');
-      setData(prev => ({ 
-        ...prev, 
+      setData(prev => ({
+        ...prev,
         proposalNumber: nextNum,
         companyName: '',
         responsible: ''
       }));
-      
+
       // Reset quantities for next proposal
       const resetQuantities: Record<string, number> = {};
       Object.keys(quantities).forEach(key => resetQuantities[key] = 0);
@@ -374,9 +399,9 @@ export default function UnimedProposalGenerator() {
             </div>
             <h1 className="text-xl font-bold tracking-tight text-unimed-green">Gerador de Propostas Unimed</h1>
           </div>
-          
+
           <div className="h-8 w-px bg-slate-200 hidden md:block"></div>
-          
+
           <div className="hidden md:flex items-center gap-3 bg-slate-50 px-4 py-1.5 rounded-full border border-slate-100">
             <div className={`w-2 h-2 rounded-full ${profile?.role === 'admin' ? 'bg-red-500' : profile?.role === 'manager' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
             <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
@@ -386,23 +411,23 @@ export default function UnimedProposalGenerator() {
             <span className="text-xs font-bold text-slate-700">{profile?.full_name}</span>
           </div>
         </div>
-        
+
         <div className="flex gap-3">
-          <button 
+          <button
             onClick={() => window.print()}
             className="flex items-center gap-2 px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
           >
             <Printer size={18} />
             Imprimir
           </button>
-          <button 
+          <button
             onClick={signOut}
             className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors font-bold"
           >
             <LogOut size={18} />
             Sair
           </button>
-          <button 
+          <button
             onClick={handleGenerateProposal}
             disabled={isGenerating}
             className="flex items-center gap-2 px-6 py-2 bg-unimed-green text-white font-semibold rounded-lg hover:bg-unimed-dark transition-all shadow-md active:scale-95 disabled:opacity-50"
@@ -417,22 +442,22 @@ export default function UnimedProposalGenerator() {
         </div>
       </header>
 
-      <main className="max-w-[1400px] mx-auto p-6 grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-8">
-        {/* Sidebar Form */}
+      <main className="max-w-[1600px] mx-auto p-6 grid grid-cols-1 lg:grid-cols-[350px_350px_1fr] gap-8">
+        {/* Coluna 1: Dados e Filtros */}
         <aside className="space-y-6">
           <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
               <Info size={20} className="text-[#00995D]" />
               Dados da Proposta
             </h2>
-            
+
             <div className="space-y-3">
               <div>
                 <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Nº da Proposta</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     name="proposalNumber"
                     value={data.proposalNumber}
                     readOnly
@@ -445,8 +470,8 @@ export default function UnimedProposalGenerator() {
                 <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">CNPJ da Empresa</label>
                 <div className="relative">
                   <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${isSearchingCNPJ ? 'text-unimed-green animate-pulse' : 'text-slate-400'}`} size={18} />
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     name="cnpj"
                     placeholder="00.000.000/0000-00"
                     value={data.cnpj}
@@ -479,8 +504,8 @@ export default function UnimedProposalGenerator() {
                 <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Empresa Contratante</label>
                 <div className="relative">
                   <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     name="companyName"
                     placeholder="Ex: ACME Corp"
                     value={data.companyName}
@@ -494,8 +519,8 @@ export default function UnimedProposalGenerator() {
                 <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Responsável</label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     name="responsible"
                     placeholder="Nome do contato"
                     value={data.responsible}
@@ -509,8 +534,8 @@ export default function UnimedProposalGenerator() {
                 <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Consultor / Vendedor</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     name="sellerName"
                     placeholder="Seu nome completo"
                     value={data.sellerName}
@@ -523,8 +548,8 @@ export default function UnimedProposalGenerator() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Validade (Dias)</label>
-                  <input 
-                    type="number" 
+                  <input
+                    type="number"
                     name="validityDays"
                     value={data.validityDays}
                     onChange={handleInputChange}
@@ -533,8 +558,8 @@ export default function UnimedProposalGenerator() {
                 </div>
                 <div>
                   <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Desconto (%)</label>
-                  <input 
-                    type="number" 
+                  <input
+                    type="number"
                     name="discount"
                     min="0"
                     max="100"
@@ -550,44 +575,43 @@ export default function UnimedProposalGenerator() {
           <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
               <ShieldCheck size={20} className="text-[#00995D]" />
-              Vidas por Faixa Etária
+              Filtro de Planos
             </h2>
-
-            {isLoading ? (
-              <div className="flex justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-unimed-green"></div>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Abrangência</p>
+                <div className="flex flex-wrap gap-2">
+                  {Array.from(new Set(plans.map(p => p.coverage))).map((coverage, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => toggleFilter('coverage', coverage)}
+                      className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all border ${selectedCoverages.includes(coverage)
+                        ? 'bg-unimed-green text-white border-unimed-green shadow-sm'
+                        : 'bg-white text-slate-400 border-slate-200 hover:border-unimed-green hover:text-unimed-green'
+                        }`}
+                    >
+                      {coverage}
+                    </button>
+                  ))}
+                </div>
               </div>
-            ) : (
-              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                {Object.keys(quantities).map((label, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-bold text-slate-700">{label}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button 
-                        onClick={() => updateQuantity(label, -1)}
-                        className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
-                      >
-                        <Minus size={16} />
-                      </button>
-                      <span className="w-6 text-center font-bold text-[#00995D]">{quantities[label]}</span>
-                      <button 
-                        onClick={() => updateQuantity(label, 1)}
-                        className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
-                      >
-                        <Plus size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
 
-            <div className="pt-4 border-t border-slate-100">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-sm text-slate-500">Total de Vidas:</span>
-                <span className="font-bold text-slate-800">{calculateTotalLives()}</span>
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Acomodação</p>
+                <div className="flex flex-wrap gap-2">
+                  {Array.from(new Set(plans.map(p => p.accommodation))).map((accommodation, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => toggleFilter('accommodation', accommodation)}
+                      className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all border ${selectedAccommodations.includes(accommodation)
+                        ? 'bg-unimed-green text-white border-unimed-green shadow-sm'
+                        : 'bg-white text-slate-400 border-slate-200 hover:border-unimed-green hover:text-unimed-green'
+                        }`}
+                    >
+                      {accommodation}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </section>
@@ -626,10 +650,58 @@ export default function UnimedProposalGenerator() {
           )}
         </aside>
 
-        {/* Document Preview */}
+        {/* Coluna 2: Quantidades de Vidas */}
+        <aside className="space-y-6">
+          <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
+              <Plus size={20} className="text-[#00995D]" />
+              Vidas por Faixa Etária
+            </h2>
+
+            {isLoading ? (
+              <div className="flex justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-unimed-green"></div>
+              </div>
+            ) : (
+              <div className="space-y-4 pr-2">
+                {Object.keys(quantities).map((label, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="flex flex-col">
+                      <span className="text-sm font-bold text-slate-700">{label}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => updateQuantity(label, -1)}
+                        className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
+                      >
+                        <Minus size={16} />
+                      </button>
+                      <span className="w-6 text-center font-bold text-[#00995D]">{quantities[label]}</span>
+                      <button
+                        onClick={() => updateQuantity(label, 1)}
+                        className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
+                      >
+                        <Plus size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-4 border-t border-slate-100">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-sm text-slate-500">Total de Vidas:</span>
+                <span className="font-bold text-slate-800">{calculateTotalLives()}</span>
+              </div>
+            </div>
+          </section>
+        </aside>
+
+        {/* Coluna 3: Document Preview */}
         <div className="relative">
-          <div className="sticky top-24">
-            <div className="mb-4 flex items-center justify-between">
+          <div className="sticky top-24 max-h-[calc(100vh-120px)] overflow-y-auto pr-4 custom-scrollbar">
+            <div className="mb-4 flex items-center justify-between no-print">
               <span className="text-sm font-bold text-slate-400 uppercase tracking-widest">Pré-visualização do Documento</span>
               <div className="flex gap-2">
                 <div className="w-3 h-3 rounded-full bg-red-400"></div>
@@ -637,26 +709,26 @@ export default function UnimedProposalGenerator() {
                 <div className="w-3 h-3 rounded-full bg-green-400"></div>
               </div>
             </div>
-            
-            <div 
+
+            <div
               id="proposal-document-container"
               className="space-y-8 pb-20"
             >
               {/* Page 1: Cover */}
               <div className="proposal-page bg-white shadow-2xl rounded-sm overflow-hidden mx-auto w-full max-w-[800px] aspect-[1/1.414] flex flex-col">
-                <div className="h-[45%] bg-slate-100 relative overflow-hidden">
-                  <Image 
-                    src="/imagens/Capa.jpg" 
-                    alt="Capa Unimed" 
+                <div className="h-[40%] bg-slate-100 relative overflow-hidden">
+                  <Image
+                    src="/imagens/Capa.jpg"
+                    alt="Capa Unimed"
                     fill
                     className="object-cover opacity-90"
                     referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-gradient-to-b from-transparent to-white/20"></div>
                   <div className="absolute bottom-8 right-8 w-48 h-20">
-                    <Image 
-                      src="/imagens/Logo Unimed.png" 
-                      alt="Logo Unimed" 
+                    <Image
+                      src="/imagens/Logo Unimed.png"
+                      alt="Logo Unimed"
                       fill
                       className="object-contain"
                       referrerPolicy="no-referrer"
@@ -712,10 +784,10 @@ export default function UnimedProposalGenerator() {
               <div className="proposal-page bg-white shadow-2xl rounded-sm overflow-hidden mx-auto w-full max-w-[800px] aspect-[1/1.414] p-16 flex flex-col">
                 <div className="flex justify-between items-center mb-10 border-b border-slate-100 pb-6">
                   <div className="flex items-center gap-4">
-                    <div className="w-24 h-12 relative">
-                      <Image 
-                        src="/imagens/Logo Unimed.png" 
-                        alt="Logo Unimed" 
+                    <div className="w-32 h-16 relative">
+                      <Image
+                        src="/imagens/Logo Unimed.png"
+                        alt="Logo Unimed"
                         fill
                         className="object-contain"
                         referrerPolicy="no-referrer"
@@ -727,9 +799,9 @@ export default function UnimedProposalGenerator() {
                     </div>
                   </div>
                   <div className="w-28 h-10 relative">
-                    <Image 
-                      src="/imagens/ans.jpg" 
-                      alt="ANS" 
+                    <Image
+                      src="/imagens/ans.jpg"
+                      alt="ANS"
                       fill
                       className="object-contain"
                       referrerPolicy="no-referrer"
@@ -737,55 +809,94 @@ export default function UnimedProposalGenerator() {
                   </div>
                 </div>
 
-                <div className="mb-8">
-                  <h2 className="text-3xl font-black text-unimed-green tracking-tighter uppercase">Quem somos?</h2>
+                <div className="mb-4">
+                  <h2 className="text-2xl font-black text-unimed-green tracking-tighter uppercase mb-8">A Unimed Brasil</h2>
                 </div>
 
                 <div className="space-y-8">
-                  <p className="text-slate-600 leading-relaxed">
+                  <p className="text-slate-600 leading-relaxed mb-12">
                     Somos uma marca que possui identidade sólida, comprometidos com a vida, com as pessoas, com o mundo. Lideramos com propósito, pois temos vocação para aquilo que fazemos. Somos ao todo 20 milhões de beneficiários por todo o Brasil, 117 mil médicos cooperados, gerando 156 mil empregos diretos. Fazemos a diferença em nossa sociedade.
                   </p>
 
-                  <div className="grid grid-cols-2 gap-6">
-                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-2">
-                      <span className="text-3xl font-black text-unimed-green">339</span>
-                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Cooperativas</p>
+                  <div className="grid grid-cols-[100px_1fr] gap-6 items-center bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                    <div className="flex flex-col items-center">
+                      <div className="relative w-full aspect-square">
+                        <Image
+                          src="/imagens/QR code.png"
+                          alt="QR Code Unimed"
+                          fill
+                          className="object-contain"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-bold mt-1 text-center leading-tight">Conheça a Unimed</span>
                     </div>
-                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-2">
-                      <span className="text-3xl font-black text-unimed-green">117 mil</span>
-                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Médicos Cooperados</p>
-                    </div>
-                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-2">
-                      <span className="text-3xl font-black text-unimed-green">20 milhões</span>
-                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Beneficiários</p>
-                    </div>
-                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-2">
-                      <span className="text-3xl font-black text-unimed-green">166</span>
-                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hospitais Próprios</p>
+
+                    <div className="flex items-center gap-12 pl-12 border-l border-slate-200 h-full">
+                      <div className="relative w-[120px] aspect-square flex-shrink-0">
+                        <Image
+                          src="/imagens/Mapa brasil.png"
+                          alt="Mapa Unimed Brasil"
+                          fill
+                          className="object-contain"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <p className="text-lg text-slate-700 leading-tight">
+                          Somos <span className="text-unimed-green font-black">339</span> Cooperativas,
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          <span className="text-unimed-green font-black">117 mil</span> médicos cooperados,
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          <span className="text-unimed-green font-black">20 milhões</span> de beneficiários,
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          <span className="text-unimed-green font-black">+ de 29 mil</span> hospitais, clinicas<br /> e serviços credenciados,
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          <span className="text-unimed-green font-black">166</span> hospitais próprios.
+                        </p>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="pt-8 space-y-4">
-                    <h3 className="text-xl font-bold text-unimed-green">A Unimed Centro Rondônia</h3>
-                    <p className="text-slate-600 leading-relaxed text-sm">
+                  <h2 className="text-2xl font-black text-unimed-green tracking-tighter uppercase mt-10 mb-8">A Unimed Centro Rondônia</h2>
+
+                  <div className="pt-6 space-y-6">
+                    <p className="text-sm leading-relaxed text-slate-600">
                       Atua em uma área de ação composta por 41 cidades, com foco na constante conquista de novos clientes, oferecendo produtos que agregam segurança, comodidade e garantias.
                     </p>
-                    <div className="grid grid-cols-2 gap-4 pt-4">
-                      <div className="flex items-center gap-3">
-                        <CheckCircle2 size={18} className="text-unimed-green" />
-                        <span className="text-xs font-bold text-slate-700">Estamos em 41 municípios</span>
+
+                    <div className="grid grid-cols-[120px_1fr] gap-6 items-center bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                      <div className="relative w-full aspect-square">
+                        <Image
+                          src="/imagens/mapa ro.png"
+                          alt="Mapa de Rondônia - Área de Atuação"
+                          fill
+                          className="object-contain"
+                          referrerPolicy="no-referrer"
+                        />
                       </div>
-                      <div className="flex items-center gap-3">
-                        <CheckCircle2 size={18} className="text-unimed-green" />
-                        <span className="text-xs font-bold text-slate-700">315 médicos cooperados</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <CheckCircle2 size={18} className="text-unimed-green" />
-                        <span className="text-xs font-bold text-slate-700">10 Serviços Próprios</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <CheckCircle2 size={18} className="text-unimed-green" />
-                        <span className="text-xs font-bold text-slate-700">45 mil beneficiários</span>
+
+                      <div className="space-y-1">
+                        <p className="text-lg text-slate-700 leading-tight">
+                          Estamos em <span className="text-unimed-green font-black">41</span> municípios.
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          Somos <span className="text-unimed-green font-black">315</span> médicos cooperados e credenciados.
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          <span className="text-unimed-green font-black">10</span> Serviços Próprios.
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          <span className="text-unimed-green font-black">45 mil</span> de beneficiários na área de atuação.
+                        </p>
+                        <p className="text-lg text-slate-700 leading-tight">
+                          <span className="text-unimed-green font-black">+ de 150</span> hospitais credenciados, laboratórios, clínicas e serviços credenciados.
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -797,15 +908,195 @@ export default function UnimedProposalGenerator() {
                 </div>
               </div>
 
-              {/* Page 3+: Pricing Tables */}
-              {plans.map((plan, planIdx) => (
+              {/* Page 3: Diferenciais Unimed */}
+              <div className="proposal-page bg-white shadow-2xl rounded-sm overflow-hidden mx-auto w-full max-w-[800px] aspect-[1/1.414] p-16 flex flex-col">
+                <div className="flex justify-between items-center mb-10 border-b border-slate-100 pb-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-32 h-16 relative">
+                      <Image
+                        src="/imagens/Logo Unimed.png"
+                        alt="Logo Unimed"
+                        fill
+                        className="object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <div className="flex flex-col">
+                      <h2 className="text-xl font-black text-unimed-green leading-none">PROPOSTA COMERCIAL</h2>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">PLANO DE SAÚDE UNIMED CENTRO RONDÔNIA</p>
+                    </div>
+                  </div>
+                  <div className="w-28 h-10 relative">
+                    <Image
+                      src="/imagens/ans.jpg"
+                      alt="ANS"
+                      fill
+                      className="object-contain"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex-1">
+                  <h2 className="text-2xl font-black text-unimed-green tracking-tighter uppercase mb-8">Diferenciais Unimed</h2>
+                  
+                  <div className="space-y-4">
+                    <div className="relative w-full aspect-video">
+                      <Image
+                        src="/imagens/nossos servicos.png"
+                        alt="Nossos Serviços"
+                        fill
+                        className="object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    
+                    <div className="relative w-full aspect-video">
+                      <Image
+                        src="/imagens/nossa marca.png"
+                        alt="Nossa Marca"
+                        fill
+                        className="object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-auto pt-8 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
+                  <span>Unimed Centro Rondônia</span>
+                  <span>Página 03</span>
+                </div>
+              </div>
+
+              {/* Page 4: Carências e Coparticipação */}
+              <div className="proposal-page bg-white shadow-2xl rounded-sm overflow-hidden mx-auto w-full max-w-[800px] aspect-[1/1.414] p-16 flex flex-col">
+                <div className="flex justify-between items-center mb-10 border-b border-slate-100 pb-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-32 h-16 relative">
+                      <Image
+                        src="/imagens/Logo Unimed.png"
+                        alt="Logo Unimed"
+                        fill
+                        className="object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <div className="flex flex-col">
+                      <h2 className="text-xl font-black text-unimed-green leading-none">PROPOSTA COMERCIAL</h2>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">PLANO DE SAÚDE UNIMED CENTRO RONDÔNIA</p>
+                    </div>
+                  </div>
+                  <div className="w-28 h-10 relative">
+                    <Image
+                      src="/imagens/ans.jpg"
+                      alt="ANS"
+                      fill
+                      className="object-contain"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex-1">
+                  <h2 className="text-2xl font-black text-unimed-green tracking-tighter uppercase mb-8">Carências</h2>
+                  
+                  <div className="grid grid-cols-[1.8fr_2fr] gap-10 items-center mb-10">
+                    <div className="relative w-full aspect-square">
+                      <Image
+                        src="/imagens/assistencia.png"
+                        alt="Assistência Unimed"
+                        fill
+                        className="object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <div className="space-y-4 text-slate-700">
+                      <div>
+                        <p className="text-sm font-bold text-unimed-green uppercase mb-1">Urgência:</p>
+                        <p className="text-xs leading-relaxed">Atendimentos Resultantes de acidentes pessoais ou de complicações no processo gestacional.</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-unimed-green uppercase mb-1">Emergência:</p>
+                        <p className="text-xs leading-relaxed">Atendimentos que implicarem risco imediato de vida ou de lesões irreparáveis para o paciente, caracterizado em declaração do médico assistente.</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-unimed-green uppercase mb-1">DLP - Doenças e Lesões Preexistentes:</p>
+                        <p className="text-xs leading-relaxed italic">são aquelas existentes antes da contratação do plano de saúde, e que o beneficiário ou seu responsável saiba ser portador (prazo 720 dias).</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <h2 className="text-2xl font-black text-unimed-green tracking-tighter uppercase mb-8">Coparticipação e Franquia</h2>
+                  <div className="space-y-6">
+                    <div className="overflow-hidden rounded-none border border-slate-100 shadow-sm transition-all hover:shadow-md">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-unimed-green text-white">
+                            <th className="py-3 px-4 text-[10px] font-black uppercase tracking-widest border-r border-white/20">PROCEDIMENTOS</th>
+                            <th className="py-3 px-4 text-[10px] font-black uppercase tracking-widest border-r border-white/20 text-center">COPARTICIPAÇÃO</th>
+                            <th className="py-3 px-4 text-[10px] font-black uppercase tracking-widest text-center">LIMITE PARTICIPATIVO</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          <tr className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-4 text-xs font-bold text-slate-700">Consultas Médicas eletivas e urgências</td>
+                            <td className="py-3 px-4 text-xs font-black text-unimed-green text-center">50%</td>
+                            <td className="py-3 px-4 text-xs font-bold text-slate-500 text-center italic">Não se aplica</td>
+                          </tr>
+                          <tr className="bg-slate-50/30 hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-4 text-xs font-bold text-slate-700">Exames laboratoriais e de imagens</td>
+                            <td className="py-3 px-4 text-xs font-black text-unimed-green text-center">30%</td>
+                            <td className="py-3 px-4 text-xs font-bold text-slate-500 text-center italic">Não se aplica</td>
+                          </tr>
+                          <tr className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-4 text-xs font-bold text-slate-700">Demais procedimentos Ambulatoriais</td>
+                            <td className="py-3 px-4 text-xs font-black text-unimed-green text-center">30%</td>
+                            <td className="py-3 px-4 text-xs font-bold text-slate-800 text-center tracking-tighter">R$ 2.200,00 por procedimento</td>
+                          </tr>
+                          <tr className="bg-slate-50/30 hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-4 text-xs font-bold text-slate-700">Procedimentos Quimioterápicos, Radiológicos e Imunobiológicos</td>
+                            <td className="py-3 px-4 text-xs font-black text-unimed-green text-center">30%</td>
+                            <td className="py-3 px-4 text-xs font-bold text-slate-800 text-center tracking-tighter">R$ 2.200,00 por procedimento</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="overflow-hidden rounded-none border border-slate-100 shadow-sm transition-all hover:shadow-md">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-unimed-green text-white">
+                            <th className="py-3 px-4 text-[10px] font-black uppercase tracking-widest border-r border-white/20">PROCEDIMENTOS</th>
+                            <th className="py-3 px-4 text-[10px] font-black uppercase tracking-widest text-center">FRANQUIA</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          <tr className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-4 text-xs font-bold text-slate-700">Internação clínica, cirúrgica e UTI</td>
+                            <td className="py-3 px-4 text-xs font-black text-unimed-green text-center">R$ 595,00</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-auto pt-8 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
+                  <span>Unimed Centro Rondônia</span>
+                  <span>Página 04</span>
+                </div>
+              </div>
+
+              {/* Page 5+: Pricing Tables */}
+              {filteredPlans.map((plan, planIdx) => (
                 <div key={planIdx} className="proposal-page bg-white shadow-2xl rounded-sm overflow-hidden mx-auto w-full max-w-[800px] aspect-[1/1.414] p-16 flex flex-col">
                   <div className="flex justify-between items-center mb-10 border-b border-slate-100 pb-6">
                     <div className="flex items-center gap-4">
-                      <div className="w-24 h-12 relative">
-                        <Image 
-                          src="/imagens/Logo Unimed.png" 
-                          alt="Logo Unimed" 
+                      <div className="w-32 h-16 relative">
+                        <Image
+                          src="/imagens/Logo Unimed.png"
+                          alt="Logo Unimed"
                           fill
                           className="object-contain"
                           referrerPolicy="no-referrer"
@@ -817,9 +1108,9 @@ export default function UnimedProposalGenerator() {
                       </div>
                     </div>
                     <div className="w-28 h-10 relative">
-                      <Image 
-                        src="/imagens/ans.jpg" 
-                        alt="ANS" 
+                      <Image
+                        src="/imagens/ans.jpg"
+                        alt="ANS"
                         fill
                         className="object-contain"
                         referrerPolicy="no-referrer"
@@ -879,7 +1170,7 @@ export default function UnimedProposalGenerator() {
                           const discountedValue = Math.round(group.value * (1 - (data.discount / 100)));
                           const qty = quantities[group.label] || 0;
                           const investment = discountedValue * qty;
-                          
+
                           return (
                             <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
                               <td className="py-2 px-4 text-xs font-bold text-slate-700">{group.label}</td>
@@ -964,20 +1255,105 @@ export default function UnimedProposalGenerator() {
 
                   <div className="mt-auto pt-8 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
                     <span>Unimed Centro Rondônia</span>
-                    <span>Página {planIdx + 3}</span>
+                    <span>Página {planIdx + 5 < 10 ? '0' + (planIdx + 5) : planIdx + 5}</span>
                   </div>
                 </div>
               ))}
+
+              {/* Final Page: Social Media */}
+              <div className="proposal-page bg-white shadow-2xl rounded-sm overflow-hidden mx-auto w-full max-w-[800px] aspect-[1/1.414] p-16 flex flex-col">
+                <div className="flex justify-between items-center mb-10 border-b border-slate-100 pb-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-32 h-16 relative">
+                      <Image
+                        src="/imagens/Logo Unimed.png"
+                        alt="Logo Unimed"
+                        fill
+                        className="object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <div className="flex flex-col">
+                      <h2 className="text-xl font-black text-unimed-green leading-none">PROPOSTA COMERCIAL</h2>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">PLANO DE SAÚDE UNIMED CENTRO RONDÔNIA</p>
+                    </div>
+                  </div>
+                  <div className="w-28 h-10 relative">
+                    <Image
+                      src="/imagens/ans.jpg"
+                      alt="ANS"
+                      fill
+                      className="object-contain"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex-1 flex items-center justify-center p-8">
+                  <div className="relative w-full h-full">
+                    <Image
+                      src="/imagens/rede sociais.png"
+                      alt="Redes Sociais Unimed"
+                      fill
+                      className="object-contain"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-auto pt-8 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
+                  <span>Unimed Centro Rondônia</span>
+                  <span>Página {filteredPlans.length + 5 < 10 ? '0' + (filteredPlans.length + 5) : filteredPlans.length + 5}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </main>
 
       <style jsx global>{`
+        @page {
+          size: A4;
+          margin: 0;
+        }
         @media print {
-          header, aside { display: none !important; }
-          main { display: block !important; padding: 0 !important; }
-          #proposal-document { box-shadow: none !important; transform: none !important; width: 100% !important; max-width: none !important; }
+          header, aside, .no-print { display: none !important; }
+          main { display: block !important; padding: 0 !important; margin: 0 !important; max-width: none !important; width: 100% !important; overflow: visible !important; height: auto !important; }
+          main > div { overflow: visible !important; height: auto !important; max-height: none !important; static !important; }
+          div[class*="sticky"] { position: static !important; max-height: none !important; overflow: visible !important; width: 100% !important; }
+          
+          #proposal-document-container { 
+            height: auto !important; 
+            max-height: none !important; 
+            overflow: visible !important; 
+            padding-bottom: 0 !important; 
+            margin-bottom: 0 !important;
+            display: block !important;
+          }
+          
+          .proposal-page { 
+            width: 210mm !important; 
+            min-height: 297mm !important; 
+            margin: 0 !important; 
+            padding: 10mm !important; 
+            box-shadow: none !important; 
+            border-radius: 0 !important;
+            border: none !important;
+            page-break-after: always !important;
+            break-after: page !important;
+            display: flex !important;
+            flex-direction: column !important;
+            position: relative !important;
+          }
+          .proposal-page:first-of-type {
+            padding: 0 !important;
+          }
+          .proposal-page:last-of-type {
+            page-break-after: auto !important;
+            break-after: auto !important;
+          }
+          /* Ensure backgrounds print */
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
