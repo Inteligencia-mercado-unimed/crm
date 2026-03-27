@@ -82,14 +82,19 @@ export default function UnimedProposalGenerator() {
   const [isSearchingCNPJ, setIsSearchingCNPJ] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [history, setHistory] = useState<any[]>([]);
+  const [showPrintModal, setShowPrintModal] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
 
   // Sync profile data to proposal data
   useEffect(() => {
     if (profile) {
+      const finalName = (profile.full_name || '').toUpperCase();
+
+      console.log('Sincronizando consultor pelo perfil:', { fullName: profile.full_name });
+
       setData(prev => ({
         ...prev,
-        sellerName: profile.full_name,
+        sellerName: finalName,
         seller_id: profile.id
       }));
     }
@@ -110,19 +115,28 @@ export default function UnimedProposalGenerator() {
             .limit(10);
 
           if (!error && supabaseHistory) {
-            setHistory(supabaseHistory.map((p: any) => ({
-              ...p,
-              proposalNumber: p.proposal_number,
-              companyName: p.company_name,
-              sellerName: p.seller_name,
-              totalLives: p.total_lives,
-              total_value: p.total_value,
-              discount: p.discount || 0
-            })));
+            const uniqueProposals: any[] = [];
+            const seen = new Set();
+            
+            supabaseHistory.forEach((p: any) => {
+              if (!seen.has(p.proposal_number)) {
+                seen.add(p.proposal_number);
+                uniqueProposals.push({
+                  ...p,
+                  proposalNumber: p.proposal_number,
+                  companyName: p.company_name,
+                  sellerName: p.seller_name,
+                  totalLives: p.total_lives,
+                  totalValue: p.total_value,
+                  discount: p.discount || 0
+                });
+              }
+            });
+            setHistory(uniqueProposals.slice(0, 10));
             return;
           }
         } catch (err) {
-          console.error('Error fetching from Supabase:', err);
+          // quiet
         }
       }
 
@@ -160,7 +174,7 @@ export default function UnimedProposalGenerator() {
           setSelectedAccommodations(accommodations);
         }
       } catch (error) {
-        console.error('Error fetching plans:', error);
+        // quiet
       } finally {
         setIsLoading(false);
       }
@@ -219,7 +233,7 @@ export default function UnimedProposalGenerator() {
         }));
       }
     } catch (error) {
-      console.error('Error fetching CNPJ:', error);
+      // quiet
     } finally {
       setIsSearchingCNPJ(false);
     }
@@ -249,6 +263,15 @@ export default function UnimedProposalGenerator() {
     selectedAccommodations.includes(p.accommodation)
   );
 
+  const formatANS = (ans: string) => {
+    if (!ans) return '---';
+    const clean = ans.replace(/\D/g, '');
+    if (clean.length === 9) {
+      return clean.replace(/^(\d{3})(\d{3})(\d{2})(\d{1})/, '$1.$2.$3-$4');
+    }
+    return ans;
+  };
+
   const calculatePlanTotal = (plan: Plan) => {
     return plan.ageGroups.reduce((acc, group) => {
       const discountedValue = Math.round(group.value * (1 - (data.discount / 100)));
@@ -269,46 +292,91 @@ export default function UnimedProposalGenerator() {
     if (!element) return;
     setIsGenerating(true);
 
-    // 1. Save to history
-    const historyData = {
-      proposal_number: data.proposalNumber,
-      company_name: data.companyName,
-      responsible: data.responsible,
-      seller_name: data.sellerName,
-      seller_id: user?.id,
-      validity_days: data.validityDays,
-      discount: data.discount,
-      date: format(new Date(), 'dd/MM/yyyy'),
-      total_lives: calculateTotalLives(),
-      total_value: plans.reduce((acc, plan) => acc + calculatePlanTotal(plan), 0)
-    };
+    // 1. Preparar dados detalhados para o Banco de Dados
+    const proposalRows: any[] = [];
+    const filteredPlans = plans.filter(p => 
+      selectedCoverages.includes(p.coverage) && 
+      selectedAccommodations.includes(p.accommodation)
+    );
+
+    filteredPlans.forEach(plan => {
+      Object.entries(quantities).forEach(([ageGroup, count]) => {
+        if (count > 0) {
+          proposalRows.push({
+            proposal_number: data.proposalNumber,
+            cnpj: data.cnpj,
+            company_name: data.companyName,
+            responsible: data.responsible,
+            seller_name: data.sellerName,
+            seller_id: user?.id,
+            validity_days: data.validityDays,
+            discount: data.discount,
+            date: format(new Date(), 'dd/MM/yyyy'),
+            plan_type: plan.type,
+            coverage: plan.coverage,
+            accommodation: plan.accommodation,
+            age_group: ageGroup,
+            lives_count: count,
+            total_lives: calculateTotalLives(),
+            total_value: plans.reduce((acc, p) => acc + calculatePlanTotal(p), 0)
+          });
+        }
+      });
+    });
+
+    // Se não houver vidas selecionadas, salvar ao menos o cabeçalho
+    if (proposalRows.length === 0) {
+      proposalRows.push({
+        proposal_number: data.proposalNumber,
+        cnpj: data.cnpj,
+        company_name: data.companyName,
+        responsible: data.responsible,
+        seller_name: data.sellerName,
+        seller_id: user?.id,
+        validity_days: data.validityDays,
+        discount: data.discount,
+        date: format(new Date(), 'dd/MM/yyyy'),
+        total_lives: calculateTotalLives(),
+        total_value: plans.reduce((acc, p) => acc + calculatePlanTotal(p), 0)
+      });
+    }
 
     // Try Supabase
     if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
       try {
-        const { error } = await supabase.from('proposals').insert([historyData]);
+        const { error } = await supabase.from('proposals').insert(proposalRows);
         if (error) throw error;
 
-        // Refresh history from Supabase
+        // Refresh history from Supabase (pegar as mais recentes baseadas no número da proposta único ou data)
         const { data: freshHistory } = await supabase
           .from('proposals')
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(10);
+          .limit(20);
 
         if (freshHistory) {
-          setHistory(freshHistory.map((p: any) => ({
-            ...p,
-            proposalNumber: p.proposal_number,
-            companyName: p.company_name,
-            sellerName: p.seller_name,
-            totalLives: p.total_lives,
-            totalValue: p.total_value,
-            discount: p.discount || 0
-          })));
+          // Agrupar para exibição no histórico (mostrar apenas uma entrada por número de proposta)
+          const uniqueProposals: any[] = [];
+          const seen = new Set();
+          
+          freshHistory.forEach((p: any) => {
+            if (!seen.has(p.proposal_number)) {
+              seen.add(p.proposal_number);
+              uniqueProposals.push({
+                ...p,
+                proposalNumber: p.proposal_number,
+                companyName: p.company_name,
+                sellerName: p.seller_name,
+                totalLives: p.total_lives,
+                totalValue: p.total_value,
+                discount: p.discount || 0
+              });
+            }
+          });
+          setHistory(uniqueProposals.slice(0, 10));
         }
       } catch (err) {
-        console.error('Error saving to Supabase:', err);
+        // quiet
       }
     }
 
@@ -330,50 +398,25 @@ export default function UnimedProposalGenerator() {
     // 2. Save last used number
     localStorage.setItem('unimed_last_proposal_number', data.proposalNumber);
 
-    try {
-      // 3. Generate PDF
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pages = element.querySelectorAll('.proposal-page');
+    // 3. Abrir Modal de Impressão
+    setShowPrintModal(true);
+  };
 
-      for (let i = 0; i < pages.length; i++) {
-        const page = pages[i] as HTMLElement;
-        const canvas = await html2canvas(page, {
-          scale: 2,
-          useCORS: true,
-          logging: false,
-        });
+  const handleConfirmPrint = () => {
+    const originalTitle = document.title;
+    const fileName = `Proposta_Unimed_${data.proposalNumber}_${(data.companyName || 'Proposta').replace(/[^a-z0-9]/gi, '_')}`;
+    
+    document.title = fileName;
+    window.print();
+    document.title = originalTitle;
+    
+    // Recarregar a página para limpar tudo (conforme pedido pelo usuário)
+    window.location.reload();
+  };
 
-        const imgData = canvas.toDataURL('image/png');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-
-        if (i > 0) pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      }
-
-      pdf.save(`Proposta_Unimed_${data.proposalNumber}_${data.companyName || 'Sem_Nome'}.pdf`);
-
-      // 4. Increment for next proposal
-      const nextNum = (parseInt(data.proposalNumber) + 1).toString().padStart(4, '0');
-      setData(prev => ({
-        ...prev,
-        proposalNumber: nextNum,
-        companyName: '',
-        responsible: ''
-      }));
-
-      // Reset quantities for next proposal
-      const resetQuantities: Record<string, number> = {};
-      Object.keys(quantities).forEach(key => resetQuantities[key] = 0);
-      setQuantities(resetQuantities);
-
-      alert(`Proposta ${newProposal.proposalNumber} gerada e salva com sucesso!`);
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      alert('Erro ao gerar a proposta. Verifique o console.');
-    } finally {
-      setIsGenerating(false);
-    }
+  const handleCancelPrint = () => {
+    setShowPrintModal(false);
+    window.location.reload();
   };
 
   if (authLoading) {
@@ -533,14 +576,14 @@ export default function UnimedProposalGenerator() {
               <div>
                 <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Consultor / Vendedor</label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                   <input
                     type="text"
                     name="sellerName"
                     placeholder="Seu nome completo"
                     value={data.sellerName}
-                    readOnly
-                    className="w-full mt-1 pl-10 pr-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 cursor-not-allowed outline-none"
+                    onChange={handleInputChange}
+                    className="w-full mt-1 pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00995D] outline-none transition-all"
                   />
                 </div>
               </div>
@@ -1121,28 +1164,32 @@ export default function UnimedProposalGenerator() {
                   <div className="flex justify-between items-end mb-6">
                     <div className="space-y-1">
                       <h2 className="text-2xl font-black text-unimed-green tracking-tighter uppercase">Proposta Plano</h2>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{plan.type}</p>
+                      <p className="text-sm font-black text-slate-600 uppercase tracking-widest">{plan.type}</p>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-6 mb-8 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                    <div className="space-y-3">
+                  <div className="space-y-4 mb-8 bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                    <div className="grid grid-cols-2 gap-6 pb-4 border-b border-slate-200/50">
                       <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">Abrangência</span>
+                        <span className="text-[9px] font-bold text-slate-600 uppercase">Abrangência</span>
                         <span className="text-xs font-bold text-slate-800 uppercase">{plan.coverage}</span>
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">Acomodação</span>
-                        <span className="text-xs font-bold text-slate-800 uppercase">{plan.accommodation}</span>
-                      </div>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">Segmentação</span>
+                        <span className="text-[9px] font-bold text-slate-600 uppercase">Segmentação</span>
                         <span className="text-xs font-bold text-slate-800 uppercase">{plan.segmentation}</span>
                       </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-6">
                       <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">Fator Moderador</span>
+                        <span className="text-[9px] font-bold text-slate-600 uppercase">Acomodação</span>
+                        <span className="text-xs font-bold text-slate-800 uppercase">{plan.accommodation}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] font-bold text-slate-600 uppercase">Registro ANS</span>
+                        <span className="text-xs font-bold text-slate-800 uppercase">{formatANS(plan.ans)}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] font-bold text-slate-600 uppercase">Fator Moderador</span>
                         <span className="text-xs font-bold text-slate-800 uppercase">{plan.moderator}</span>
                       </div>
                     </div>
@@ -1360,6 +1407,44 @@ export default function UnimedProposalGenerator() {
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
       `}</style>
+
+      {/* Pop-up de Confirmação de Impressão */}
+      <AnimatePresence>
+        {showPrintModal && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm no-print">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full text-center space-y-6 border border-slate-100"
+            >
+              <div className="w-16 h-16 bg-unimed-green/10 rounded-full flex items-center justify-center mx-auto">
+                <Printer className="text-unimed-green" size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-black text-slate-800 tracking-tight">Deseja imprimir a proposta?</h3>
+                <p className="text-slate-500 text-sm leading-relaxed">
+                  A proposta foi salva no banco de dados com sucesso.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={handleCancelPrint}
+                  className="flex-1 px-4 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors"
+                >
+                  Não, apenas limpar
+                </button>
+                <button
+                  onClick={handleConfirmPrint}
+                  className="flex-1 px-4 py-3 rounded-xl font-bold text-white bg-unimed-green hover:bg-[#007c4b] shadow-lg shadow-unimed-green/20 transition-all active:scale-95"
+                >
+                  Sim, imprimir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
