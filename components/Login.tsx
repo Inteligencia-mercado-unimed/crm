@@ -32,7 +32,7 @@ export function Login() {
         });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -43,8 +43,14 @@ export function Login() {
           },
         });
         if (error) throw error;
-        alert('Cadastro realizado! Verifique seu e-mail ou faça login.');
-        setIsLogin(true);
+        
+        if (data?.session) {
+          // Se o e-mail não precisa de confirmação, o Supabase já loga o usuário
+          // O hook useAuth vai detectar a mudança de estado automaticamente via onAuthStateChange
+        } else {
+          alert('Cadastro realizado com sucesso! Você já pode entrar.');
+          setIsLogin(true);
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Erro ao autenticar');

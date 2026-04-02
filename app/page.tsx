@@ -485,9 +485,12 @@ export default function UnimedProposalGenerator() {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto p-6 grid grid-cols-1 lg:grid-cols-[350px_350px_1fr] gap-8">
-        {/* Coluna 1: Dados e Filtros */}
-        <aside className="space-y-6">
+      <main className="max-w-[1600px] mx-auto p-6 flex flex-col xl:flex-row gap-8 items-start">
+        {/* Container Lado Esquerdo */}
+        <div className="flex flex-col gap-8 w-full xl:w-[702px] shrink-0">
+          <div className="flex flex-col md:flex-row gap-8 w-full">
+            {/* Coluna 1: Dados e Filtros */}
+            <aside className="space-y-6 w-full md:w-[350px] shrink-0">
           <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
               <Info size={20} className="text-[#00995D]" />
@@ -658,43 +661,10 @@ export default function UnimedProposalGenerator() {
               </div>
             </div>
           </section>
-
-          {history.length > 0 && (
-            <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
-                <Clock size={20} className="text-[#00995D]" />
-                Propostas Recentes
-              </h2>
-              <div className="space-y-3">
-                {history.map((prop, idx) => (
-                  <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs">
-                    <div className="flex justify-between font-bold text-unimed-green mb-1">
-                      <span>Nº {prop.proposalNumber}</span>
-                      <span>{prop.date}</span>
-                    </div>
-                    <p className="text-slate-700 font-semibold truncate">{prop.companyName || 'Sem Nome'}</p>
-                    <div className="flex justify-between items-center mt-1">
-                      <div className="flex items-center gap-2">
-                        <p className="text-slate-400">Vendedor: {prop.sellerName || '---'}</p>
-                        {prop.discount > 0 && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-unimed-green/10 text-unimed-green rounded">
-                            -{prop.discount}%
-                          </span>
-                        )}
-                      </div>
-                      {profile?.role !== 'seller' && prop.seller_id !== user?.id && (
-                        <Shield size={12} className="text-slate-300" />
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </aside>
 
         {/* Coluna 2: Quantidades de Vidas */}
-        <aside className="space-y-6">
+        <aside className="space-y-6 w-full md:w-[320px] shrink-0">
           <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
               <Plus size={20} className="text-[#00995D]" />
@@ -740,9 +710,47 @@ export default function UnimedProposalGenerator() {
             </div>
           </section>
         </aside>
+          </div>
+
+          {/* Histórico ocupando a largura total */}
+          {history.length > 0 && (
+            <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
+                <Clock size={20} className="text-[#00995D]" />
+                Propostas Recentes
+              </h2>
+              <div className="flex flex-col gap-4">
+                {history.map((prop, idx) => (
+                  <div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100 text-sm shadow-sm transition-all hover:border-unimed-green/30">
+                    <div className="flex justify-between font-bold text-unimed-green mb-2">
+                      <span>Nº {prop.proposalNumber}</span>
+                      <span>{prop.date}</span>
+                    </div>
+                    <p className="text-slate-700 font-semibold break-words leading-tight">{prop.companyName || 'Sem Nome'}</p>
+                    <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-200/50">
+                      <div className="flex items-center gap-2">
+                        <p className="text-slate-500 text-xs break-words" title={prop.sellerName || '---'}>
+                          Vend: {prop.sellerName || '---'}
+                        </p>
+                        {prop.discount > 0 && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-unimed-green/10 text-unimed-green rounded flex-shrink-0">
+                            -{prop.discount}%
+                          </span>
+                        )}
+                      </div>
+                      {profile?.role !== 'seller' && prop.seller_id !== user?.id && (
+                        <Shield size={14} className="text-slate-300" title="Vendedor diferente" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
 
         {/* Coluna 3: Document Preview */}
-        <div className="relative">
+        <div className="relative w-full flex-1">
           <div className="sticky top-24 max-h-[calc(100vh-120px)] overflow-y-auto pr-4 custom-scrollbar">
             <div className="mb-4 flex items-center justify-between no-print">
               <span className="text-sm font-bold text-slate-400 uppercase tracking-widest">Pré-visualização do Documento</span>
