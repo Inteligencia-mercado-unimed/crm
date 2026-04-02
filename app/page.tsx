@@ -739,7 +739,9 @@ export default function UnimedProposalGenerator() {
                         )}
                       </div>
                       {profile?.role !== 'seller' && prop.seller_id !== user?.id && (
-                        <Shield size={14} className="text-slate-300" title="Vendedor diferente" />
+                        <span title="Vendedor diferente">
+                          <Shield size={14} className="text-slate-300" />
+                        </span>
                       )}
                     </div>
                   </div>
