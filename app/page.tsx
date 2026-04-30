@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { format, addDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import Image from 'next/image';
+import Link from 'next/link';
 import {
   Download,
   Printer,
@@ -19,7 +20,12 @@ import {
   Clock,
   MapPin,
   Search,
-  Lock
+  Lock,
+  LayoutDashboard,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -83,22 +89,30 @@ export default function UnimedProposalGenerator() {
   const [isLoading, setIsLoading] = useState(true);
   const [history, setHistory] = useState<any[]>([]);
   const [showPrintModal, setShowPrintModal] = useState(false);
+  const [showCompanyModal, setShowCompanyModal] = useState(false);
+  const [companyDetails, setCompanyDetails] = useState<any>(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [openSection, setOpenSection] = useState<'dados' | 'filtros' | 'vidas' | ''>('dados');
   const previewRef = useRef<HTMLDivElement>(null);
+
+  const allCoverages = Array.from(new Set(plans.map(p => p.coverage)));
+  const allAccommodations = Array.from(new Set(plans.map(p => p.accommodation)));
 
   // Sync profile data to proposal data
   useEffect(() => {
     if (profile) {
-      const finalName = (profile.full_name || '').toUpperCase();
-
-      console.log('Sincronizando consultor pelo perfil:', { fullName: profile.full_name });
-
-      setData(prev => ({
-        ...prev,
-        sellerName: finalName,
+      setData(prev => ({ 
+        ...prev, 
+        sellerName: profile.full_name,
         seller_id: profile.id
       }));
     }
   }, [profile]);
+
+  // Step Completion Logic
+  const isStep1Complete = !!data.cnpj && data.cnpj.replace(/\D/g, '').length >= 14;
+  const isStep2Complete = selectedCoverages.length > 0 && selectedAccommodations.length > 0;
+  const isStep3Complete = Object.values(quantities).some(q => q > 0);
 
   // Load history on mount
   useEffect(() => {
@@ -160,18 +174,16 @@ export default function UnimedProposalGenerator() {
           setPlans(result);
 
           // Initialize quantities for all unique age groups
-          const uniqueAgeGroups = Array.from(new Set(result.flatMap((p: Plan) => p.ageGroups.map(ag => ag.label))));
+          const uniqueAgeGroups = Array.from(new Set(result.flatMap((p: Plan) => p.ageGroups.map((ag: PlanAgeGroup) => ag.label))));
           const initialQuantities: Record<string, number> = {};
-          uniqueAgeGroups.forEach(label => {
-            initialQuantities[label as string] = 0;
+          uniqueAgeGroups.forEach((label: string) => {
+            initialQuantities[label] = 0;
           });
           setQuantities(initialQuantities);
 
-          // Initialize filters with all options selected
-          const coverages = Array.from(new Set(result.map((p: Plan) => p.coverage))) as string[];
-          const accommodations = Array.from(new Set(result.map((p: Plan) => p.accommodation))) as string[];
-          setSelectedCoverages(coverages);
-          setSelectedAccommodations(accommodations);
+          // Initialize filters with no options selected
+          setSelectedCoverages([]);
+          setSelectedAccommodations([]);
         }
       } catch (error) {
         // quiet
@@ -221,22 +233,99 @@ export default function UnimedProposalGenerator() {
 
   const handleCNPJLookup = async (cnpj: string) => {
     setIsSearchingCNPJ(true);
+    const cleanCNPJ = cnpj.replace(/\D/g, '');
+    
+    // --- Tentar Brasil API (Primária) ---
     try {
-      const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
-      if (response.ok) {
-        const result = await response.json();
+      const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleanCNPJ}`);
+      if (resp.ok) {
+        const result = await resp.json();
         setData(prev => ({
           ...prev,
           companyName: result.razao_social,
           municipio: result.municipio,
           situacao: result.descricao_situacao_cadastral
         }));
+        setCompanyDetails(result);
+        setShowCompanyModal(true);
+        setIsSearchingCNPJ(false);
+        return;
       }
-    } catch (error) {
-      // quiet
+    } catch (err) {
+      console.warn('Brasil API falhou, tentando fallback 1...');
+    }
+
+    // --- Fallback 1: CNPJ.ws (Pública) ---
+    try {
+      const resp = await fetch(`https://publica.cnpj.ws/cnpj/${cleanCNPJ}`);
+      if (resp.ok) {
+        const result = await resp.json();
+        const mappedData = {
+          razao_social: result.razao_social,
+          nome_fantasia: result.estabelecimento?.nome_fantasia || result.razao_social,
+          municipio: result.estabelecimento?.cidade?.nome || '',
+          situacao: result.estabelecimento?.situacao_cadastral || '',
+          email: result.estabelecimento?.email,
+          telefone: (result.estabelecimento?.ddd1 && result.estabelecimento?.telefone1) ? `(${result.estabelecimento.ddd1}) ${result.estabelecimento.telefone1}` : '',
+          data_abertura: result.estabelecimento?.data_inicio_atividade,
+          logradouro: result.estabelecimento?.logradouro,
+          numero: result.estabelecimento?.numero,
+          bairro: result.estabelecimento?.bairro,
+          cep: result.estabelecimento?.cep,
+          natureza_juridica: result.natureza_juridica?.nome,
+          tipo: result.estabelecimento?.tipo,
+          socios: result.socios?.map((s: any) => ({ nome: s.nome, qualificacao: s.qualificacao_socio?.nome }))
+        };
+        setData(prev => ({
+          ...prev,
+          companyName: mappedData.razao_social,
+          municipio: mappedData.municipio,
+          situacao: mappedData.situacao
+        }));
+        setCompanyDetails(mappedData);
+        setShowCompanyModal(true);
+        setIsSearchingCNPJ(false);
+        return;
+      }
+    } catch (err) {
+      console.warn('CNPJ.ws falhou, tentando fallback 2...');
+    }
+
+    // --- Fallback 2: OpenCNPJ ---
+    try {
+      const resp = await fetch(`https://api.opencnpj.org/${cleanCNPJ}`);
+      if (resp.ok) {
+        const result = await resp.json();
+        setData(prev => ({
+          ...prev,
+          companyName: result.razao_social || result.nome_fantasia,
+          municipio: result.municipio || '',
+          situacao: result.situacao_cadastral || ''
+        }));
+        setCompanyDetails(result);
+        setShowCompanyModal(true);
+      }
+    } catch (err) {
+      console.error('Todas as APIs de CNPJ falharam.');
     } finally {
       setIsSearchingCNPJ(false);
     }
+  };
+
+  const handleCloseCompanyModal = () => {
+    setData(prev => ({ 
+      ...prev, 
+      cnpj: '', 
+      companyName: '',
+      municipio: '',
+      situacao: ''
+    }));
+    setCompanyDetails(null);
+    setShowCompanyModal(false);
+  };
+
+  const handleConfirmCompanyModal = () => {
+    setShowCompanyModal(false);
   };
 
   const updateQuantity = (label: string, delta: number) => {
@@ -258,7 +347,7 @@ export default function UnimedProposalGenerator() {
     }
   };
 
-  const filteredPlans = plans.filter(p =>
+  const filteredPlans = plans.filter((p: Plan) =>
     selectedCoverages.includes(p.coverage) &&
     selectedAccommodations.includes(p.accommodation)
   );
@@ -288,6 +377,16 @@ export default function UnimedProposalGenerator() {
   };
 
   const handleGenerateProposal = async () => {
+    if (calculateTotalLives() === 0) {
+      setErrorMessage('Por favor, selecione pelo menos 1 vida na seção "Vidas por Faixa Etária".');
+      return;
+    }
+
+    if (selectedCoverages.length === 0 || selectedAccommodations.length === 0) {
+      setErrorMessage('Por favor, selecione pelo menos uma opção no "Filtro de Planos" (Abrangência e Acomodação).');
+      return;
+    }
+
     const element = document.getElementById('proposal-document-container');
     if (!element) return;
     setIsGenerating(true);
@@ -299,8 +398,8 @@ export default function UnimedProposalGenerator() {
       selectedAccommodations.includes(p.accommodation)
     );
 
-    filteredPlans.forEach(plan => {
-      Object.entries(quantities).forEach(([ageGroup, count]) => {
+    filteredPlans.forEach((plan: Plan) => {
+      Object.entries(quantities).forEach(([ageGroup, count]: [string, number]) => {
         if (count > 0) {
           proposalRows.push({
             proposal_number: data.proposalNumber,
@@ -318,7 +417,7 @@ export default function UnimedProposalGenerator() {
             age_group: ageGroup,
             lives_count: count,
             total_lives: calculateTotalLives(),
-            total_value: plans.reduce((acc, p) => acc + calculatePlanTotal(p), 0)
+            total_value: plans.reduce((acc: number, p: Plan) => acc + calculatePlanTotal(p), 0)
           });
         }
       });
@@ -337,13 +436,28 @@ export default function UnimedProposalGenerator() {
         discount: data.discount,
         date: format(new Date(), 'dd/MM/yyyy'),
         total_lives: calculateTotalLives(),
-        total_value: plans.reduce((acc, p) => acc + calculatePlanTotal(p), 0)
+        total_value: plans.reduce((acc: number, p: Plan) => acc + calculatePlanTotal(p), 0)
       });
     }
 
     // Try Supabase
     if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
       try {
+        // --- 1. Salvar ou Atualizar o Cliente ---
+        if (companyDetails) {
+          const customerData = {
+            cnpj: data.cnpj.replace(/\D/g, ''),
+            company_name: data.companyName,
+            trade_name: companyDetails.nome_fantasia || '',
+            email: companyDetails.email || '',
+            phone: companyDetails.ddd_telefone_1 || companyDetails.telefone || '',
+            address: `${companyDetails.logradouro || ''}, ${companyDetails.numero || ''} - ${companyDetails.bairro || ''}`,
+            municipio: data.municipio || '',
+            uf: companyDetails.uf || ''
+          };
+          await supabase.from('customers').upsert(customerData, { onConflict: 'cnpj' });
+        }
+
         const { error } = await supabase.from('proposals').insert(proposalRows);
         if (error) throw error;
 
@@ -375,8 +489,11 @@ export default function UnimedProposalGenerator() {
           });
           setHistory(uniqueProposals.slice(0, 10));
         }
-      } catch (err) {
-        // quiet
+      } catch (err: any) {
+        console.error('Erro ao salvar no Supabase:', err);
+        setErrorMessage('Erro ao salvar no banco de dados: ' + (err.message || 'Tente novamente.'));
+        setIsGenerating(false);
+        return;
       }
     }
 
@@ -402,6 +519,14 @@ export default function UnimedProposalGenerator() {
     setShowPrintModal(true);
   };
 
+  const handleHeaderPrint = () => {
+    const originalTitle = document.title;
+    const fileName = `Proposta_Unimed_${data.proposalNumber}_${(data.companyName || 'Proposta').replace(/[^a-z0-9]/gi, '_')}`;
+    document.title = fileName;
+    window.print();
+    document.title = originalTitle;
+  };
+
   const handleConfirmPrint = () => {
     const originalTitle = document.title;
     const fileName = `Proposta_Unimed_${data.proposalNumber}_${(data.companyName || 'Proposta').replace(/[^a-z0-9]/gi, '_')}`;
@@ -410,7 +535,7 @@ export default function UnimedProposalGenerator() {
     window.print();
     document.title = originalTitle;
     
-    // Recarregar a página para limpar tudo (conforme pedido pelo usuário)
+    setShowPrintModal(false);
     window.location.reload();
   };
 
@@ -419,336 +544,430 @@ export default function UnimedProposalGenerator() {
     window.location.reload();
   };
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <Loader2 className="animate-spin text-unimed-green" size={48} />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <Login />;
-  }
-
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-50 px-6 py-4 flex justify-between items-center shadow-sm">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-3">
-            <div className="bg-unimed-green p-2 rounded-lg">
-              <FileText className="text-white" size={24} />
+      {/* Top Bar do Gerador */}
+      <div className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center no-print sticky top-0 z-10">
+        <div className="flex flex-col">
+          <h1 className="text-xl font-bold text-slate-800 tracking-tight">Nova Proposta Comercial</h1>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Unimed Centro Rondônia</p>
+        </div>
+        
+        {/* Stepper (Design da imagem) */}
+        <div className="hidden md:flex items-center gap-4">
+          <div className="flex flex-col items-center">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shadow-sm transition-all duration-300 ${isStep1Complete ? 'bg-[#00995D] text-white shadow-[#00995D]/20' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+              {isStep1Complete ? <CheckCircle2 size={16} /> : '1'}
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-unimed-green">Gerador de Propostas Unimed</h1>
+            <span className={`text-[10px] font-bold mt-1 uppercase tracking-tighter transition-colors ${isStep1Complete ? 'text-[#00995D]' : 'text-slate-400'}`}>Dados</span>
           </div>
-
-          <div className="h-8 w-px bg-slate-200 hidden md:block"></div>
-
-          <div className="hidden md:flex items-center gap-3 bg-slate-50 px-4 py-1.5 rounded-full border border-slate-100">
-            <div className={`w-2 h-2 rounded-full ${profile?.role === 'admin' ? 'bg-red-500' : profile?.role === 'manager' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
-            <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-              {profile?.role === 'admin' ? 'Administrador' : profile?.role === 'manager' ? 'Gerente' : 'Vendedor'}
-            </span>
-            <span className="text-xs font-medium text-slate-400">|</span>
-            <span className="text-xs font-bold text-slate-700">{profile?.full_name}</span>
+          <div className={`h-0.5 w-12 rounded-full transition-colors duration-500 ${isStep1Complete ? 'bg-[#00995D]' : 'bg-slate-100'}`}></div>
+          
+          <div className={`flex flex-col items-center transition-opacity duration-300 ${isStep2Complete ? 'opacity-100' : isStep1Complete ? 'opacity-100' : 'opacity-40'}`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shadow-sm transition-all duration-300 ${isStep2Complete ? 'bg-[#00995D] text-white shadow-[#00995D]/20' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+              {isStep2Complete ? <CheckCircle2 size={16} /> : '2'}
+            </div>
+            <span className={`text-[10px] font-bold mt-1 uppercase tracking-tighter transition-colors ${isStep2Complete ? 'text-[#00995D]' : 'text-slate-400'}`}>Filtros</span>
+          </div>
+          <div className={`h-0.5 w-12 rounded-full transition-colors duration-500 ${isStep2Complete ? 'bg-[#00995D]' : 'bg-slate-100'}`}></div>
+          
+          <div className={`flex flex-col items-center transition-opacity duration-300 ${isStep3Complete ? 'opacity-100' : isStep2Complete ? 'opacity-100' : 'opacity-40'}`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shadow-sm transition-all duration-300 ${isStep3Complete ? 'bg-[#00995D] text-white shadow-[#00995D]/20' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+              {isStep3Complete ? <CheckCircle2 size={16} /> : '3'}
+            </div>
+            <span className={`text-[10px] font-bold mt-1 uppercase tracking-tighter transition-colors ${isStep3Complete ? 'text-[#00995D]' : 'text-slate-400'}`}>Vidas</span>
           </div>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex gap-6 items-center">
+          <div className="flex gap-4 no-print mr-4 border-r border-slate-100 pr-6">
+            <button className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors">Drafts</button>
+            <button className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors">Templates</button>
+            <button className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors">Archive</button>
+          </div>
           <button
-            onClick={() => window.print()}
-            className="flex items-center gap-2 px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 text-slate-400 hover:text-slate-600 font-bold text-sm transition-colors"
           >
-            <Printer size={18} />
-            Imprimir
+            Limpar
           </button>
           <button
-            onClick={signOut}
-            className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors font-bold"
+            onClick={handleHeaderPrint}
+            disabled={isGenerating || calculateTotalLives() === 0}
+            className="bg-[#00995D] hover:bg-[#007D4C] text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-lg shadow-[#00995D]/20 disabled:opacity-50 disabled:shadow-none flex items-center gap-2"
           >
-            <LogOut size={18} />
-            Sair
-          </button>
-          <button
-            onClick={handleGenerateProposal}
-            disabled={isGenerating}
-            className="flex items-center gap-2 px-6 py-2 bg-unimed-green text-white font-semibold rounded-lg hover:bg-unimed-dark transition-all shadow-md active:scale-95 disabled:opacity-50"
-          >
-            {isGenerating ? 'Gerando...' : (
-              <>
-                <FileText size={18} />
-                Gerar Proposta
-              </>
-            )}
+            {isGenerating ? <Loader2 className="animate-spin" size={18} /> : <Printer size={18} />}
+            Gerar PDF
           </button>
         </div>
-      </header>
+      </div>
 
       <main className="max-w-[1600px] mx-auto p-6 flex flex-col xl:flex-row gap-8 items-start">
         {/* Container Lado Esquerdo */}
-        <div className="flex flex-col gap-8 w-full xl:w-[702px] shrink-0">
-          <div className="flex flex-col md:flex-row gap-8 w-full">
-            {/* Coluna 1: Dados e Filtros */}
-            <aside className="space-y-6 w-full md:w-[350px] shrink-0">
-          <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-            <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
-              <Info size={20} className="text-[#00995D]" />
-              Dados da Proposta
-            </h2>
+        <div className="flex flex-col gap-4 w-full xl:w-[450px] shrink-0 no-print">
+          
+          {/* Seção 1: Dados da Proposta */}
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <button 
+              onClick={() => setOpenSection(openSection === 'dados' ? '' : 'dados')}
+              className="w-full flex items-center justify-between p-4 bg-white hover:bg-slate-50 transition-colors"
+            >
+              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
+                <Info size={20} className="text-[#00995D]" />
+                Dados da Proposta
+              </h2>
+              {openSection === 'dados' ? <ChevronUp size={20} className="text-slate-400" /> : <ChevronDown size={20} className="text-slate-400" />}
+            </button>
 
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Nº da Proposta</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                  <input
-                    type="text"
-                    name="proposalNumber"
-                    value={data.proposalNumber}
-                    readOnly
-                    className="w-full mt-1 pl-10 pr-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 cursor-not-allowed outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">CNPJ da Empresa</label>
-                <div className="relative">
-                  <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${isSearchingCNPJ ? 'text-unimed-green animate-pulse' : 'text-slate-400'}`} size={18} />
-                  <input
-                    type="text"
-                    name="cnpj"
-                    placeholder="00.000.000/0000-00"
-                    value={data.cnpj}
-                    onChange={handleInputChange}
-                    className="w-full mt-1 pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00995D] outline-none transition-all"
-                  />
-                  {isSearchingCNPJ && (
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                      <Loader2 size={16} className="animate-spin text-unimed-green" />
+            <AnimatePresence>
+              {openSection === 'dados' && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="p-4 pt-0 space-y-2 border-t border-slate-100 mt-2">
+                  <div>
+                    <label className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Nº da Proposta</label>
+                    <div className="relative mt-0.5">
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+                      <input
+                        type="text"
+                        name="proposalNumber"
+                        value={data.proposalNumber}
+                        readOnly
+                        className="w-full pl-9 pr-4 py-2 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 cursor-not-allowed outline-none text-[13px] font-bold"
+                      />
                     </div>
-                  )}
-                </div>
-                {(data.municipio || data.situacao) && (
-                  <div className="mt-1.5 flex flex-wrap gap-2">
-                    {data.situacao && (
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${data.situacao === 'ATIVA' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {data.situacao}
-                      </span>
-                    )}
-                    {data.municipio && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                        {data.municipio}
-                      </span>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">CNPJ da Empresa</label>
+                    <div className="relative mt-0.5">
+                      <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${isSearchingCNPJ ? 'text-unimed-green animate-pulse' : 'text-slate-400'}`} size={16} />
+                      <input
+                        type="text"
+                        name="cnpj"
+                        placeholder="00.000.000/0000-00"
+                        value={data.cnpj}
+                        onChange={handleInputChange}
+                        className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00995D] outline-none transition-all text-sm font-medium"
+                      />
+                      {isSearchingCNPJ && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <Loader2 size={16} className="animate-spin text-unimed-green" />
+                        </div>
+                      )}
+                    </div>
+                    {(data.municipio || data.situacao) && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {data.situacao && (
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${data.situacao === 'ATIVA' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {data.situacao}
+                          </span>
+                        )}
+                        {data.municipio && (
+                          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                            {data.municipio}
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
 
-              <div>
-                <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Empresa Contratante</label>
-                <div className="relative">
-                  <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input
-                    type="text"
-                    name="companyName"
-                    placeholder="Ex: ACME Corp"
-                    value={data.companyName}
-                    onChange={handleInputChange}
-                    className="w-full mt-1 pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00995D] outline-none transition-all"
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Empresa Contratante</label>
+                    <div className="relative mt-0.5">
+                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <input
+                        type="text"
+                        name="companyName"
+                        placeholder="Ex: ACME Corp"
+                        value={data.companyName}
+                        onChange={handleInputChange}
+                        className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00995D] outline-none transition-all text-sm font-medium"
+                      />
+                    </div>
+                  </div>
 
-              <div>
-                <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Responsável</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input
-                    type="text"
-                    name="responsible"
-                    placeholder="Nome do contato"
-                    value={data.responsible}
-                    onChange={handleInputChange}
-                    className="w-full mt-1 pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00995D] outline-none transition-all"
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Responsável</label>
+                    <div className="relative mt-0.5">
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <input
+                        type="text"
+                        name="responsible"
+                        placeholder="Nome do contato"
+                        value={data.responsible}
+                        onChange={handleInputChange}
+                        className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00995D] outline-none transition-all text-sm font-medium"
+                      />
+                    </div>
+                  </div>
 
-              <div>
-                <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Consultor / Vendedor</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input
-                    type="text"
-                    name="sellerName"
-                    placeholder="Seu nome completo"
-                    value={data.sellerName}
-                    onChange={handleInputChange}
-                    className="w-full mt-1 pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00995D] outline-none transition-all"
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Consultor / Vendedor</label>
+                    <div className="relative mt-0.5">
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <input
+                        type="text"
+                        name="sellerName"
+                        placeholder="Seu nome completo"
+                        value={data.sellerName}
+                        onChange={handleInputChange}
+                        className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00995D] outline-none transition-all text-sm font-medium"
+                      />
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Validade (Dias)</label>
-                  <input
-                    type="number"
-                    name="validityDays"
-                    value={data.validityDays}
-                    onChange={handleInputChange}
-                    className="w-full mt-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00995D] outline-none transition-all"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Desconto (%)</label>
-                  <input
-                    type="number"
-                    name="discount"
-                    min="0"
-                    max="100"
-                    value={data.discount}
-                    onChange={handleInputChange}
-                    className="w-full mt-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00995D] outline-none transition-all"
-                  />
-                </div>
-              </div>
-            </div>
-          </section>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Validade (Dias)</label>
+                      <input
+                        type="number"
+                        name="validityDays"
+                        value={data.validityDays}
+                        onChange={handleInputChange}
+                        className="w-full mt-0.5 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00995D] outline-none transition-all text-sm font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Desconto (%)</label>
+                      <input
+                        type="number"
+                        name="discount"
+                        min="0"
+                        max="100"
+                        value={data.discount}
+                        onChange={handleInputChange}
+                        className="w-full mt-0.5 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00995D] outline-none transition-all text-sm font-medium"
+                      />
+                    </div>
+                  </div>
 
-          <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                  <div className="p-4 pt-0">
+                    <button
+                      onClick={() => setOpenSection('filtros')}
+                      disabled={!isStep1Complete}
+                      className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${
+                        isStep1Complete 
+                          ? 'bg-[#00995D] text-white shadow-lg shadow-[#00995D]/20 hover:scale-[1.02] active:scale-95' 
+                          : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                      }`}
+                    >
+                      Seguir para Filtros
+                      <ArrowRight size={18} />
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </section>
+
+        {/* Seção 2: Filtro de Planos */}
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <button 
+            onClick={() => setOpenSection(openSection === 'filtros' ? '' : 'filtros')}
+            className="w-full flex items-center justify-between p-4 bg-white hover:bg-slate-50 transition-colors"
+          >
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
               <ShieldCheck size={20} className="text-[#00995D]" />
               Filtro de Planos
             </h2>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Abrangência</p>
-                <div className="flex flex-wrap gap-2">
-                  {Array.from(new Set(plans.map(p => p.coverage))).map((coverage, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => toggleFilter('coverage', coverage)}
-                      className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all border ${selectedCoverages.includes(coverage)
-                        ? 'bg-unimed-green text-white border-unimed-green shadow-sm'
-                        : 'bg-white text-slate-400 border-slate-200 hover:border-unimed-green hover:text-unimed-green'
-                        }`}
-                    >
-                      {coverage}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {openSection === 'filtros' ? <ChevronUp size={20} className="text-slate-400" /> : <ChevronDown size={20} className="text-slate-400" />}
+          </button>
 
-              <div className="space-y-2">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Acomodação</p>
-                <div className="flex flex-wrap gap-2">
-                  {Array.from(new Set(plans.map(p => p.accommodation))).map((accommodation, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => toggleFilter('accommodation', accommodation)}
-                      className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all border ${selectedAccommodations.includes(accommodation)
-                        ? 'bg-unimed-green text-white border-unimed-green shadow-sm'
-                        : 'bg-white text-slate-400 border-slate-200 hover:border-unimed-green hover:text-unimed-green'
-                        }`}
-                    >
-                      {accommodation}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
-        </aside>
+          <AnimatePresence>
+            {openSection === 'filtros' && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden"
+              >
+                <div className="p-4 pt-0 space-y-2 border-t border-slate-100 mt-2">
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Abrangência</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Array.from(new Set(plans.map(p => p.coverage))).map((coverage, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => toggleFilter('coverage', coverage)}
+                          className={`px-3 py-1 rounded-full text-xs font-bold transition-all border ${selectedCoverages.includes(coverage)
+                            ? 'bg-unimed-green text-white border-unimed-green shadow-sm'
+                            : 'bg-white text-slate-500 border-slate-200 hover:border-unimed-green hover:text-unimed-green'
+                            }`}
+                        >
+                          {coverage}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-        {/* Coluna 2: Quantidades de Vidas */}
-        <aside className="space-y-6 w-full md:w-[320px] shrink-0">
-          <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Acomodação</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Array.from(new Set(plans.map(p => p.accommodation))).map((accommodation, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => toggleFilter('accommodation', accommodation)}
+                          className={`px-3 py-1 rounded-full text-xs font-bold transition-all border ${selectedAccommodations.includes(accommodation)
+                            ? 'bg-unimed-green text-white border-unimed-green shadow-sm'
+                            : 'bg-white text-slate-500 border-slate-200 hover:border-unimed-green hover:text-unimed-green'
+                            }`}
+                        >
+                          {accommodation}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="p-4 pt-0">
+                    <button
+                      onClick={() => setOpenSection('vidas')}
+                      disabled={!isStep2Complete}
+                      className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${
+                        isStep2Complete 
+                          ? 'bg-[#00995D] text-white shadow-lg shadow-[#00995D]/20 hover:scale-[1.02] active:scale-95' 
+                          : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                      }`}
+                    >
+                      Seguir para Vidas
+                      <ArrowRight size={18} />
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </section>
+
+        {/* Seção 3: Vidas por Faixa Etária */}
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <button 
+            onClick={() => setOpenSection(openSection === 'vidas' ? '' : 'vidas')}
+            className="w-full flex items-center justify-between p-4 bg-white hover:bg-slate-50 transition-colors"
+          >
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
               <Plus size={20} className="text-[#00995D]" />
               Vidas por Faixa Etária
             </h2>
+            {openSection === 'vidas' ? <ChevronUp size={20} className="text-slate-400" /> : <ChevronDown size={20} className="text-slate-400" />}
+          </button>
 
-            {isLoading ? (
-              <div className="flex justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-unimed-green"></div>
-              </div>
-            ) : (
-              <div className="space-y-4 pr-2">
-                {Object.keys(quantities).map((label, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-bold text-slate-700">{label}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => updateQuantity(label, -1)}
-                        className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
-                      >
-                        <Minus size={16} />
-                      </button>
-                      <span className="w-6 text-center font-bold text-[#00995D]">{quantities[label]}</span>
-                      <button
-                        onClick={() => updateQuantity(label, 1)}
-                        className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
-                      >
-                        <Plus size={16} />
-                      </button>
-                    </div>
+          <AnimatePresence>
+            {openSection === 'vidas' && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden"
+              >
+                <div className="p-4 pt-0 flex flex-col border-t border-slate-100 mt-2">
+                  {isLoading ? (
+                  <div className="flex justify-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-unimed-green"></div>
                   </div>
-                ))}
-              </div>
-            )}
-
-            <div className="pt-4 border-t border-slate-100">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-sm text-slate-500">Total de Vidas:</span>
-                <span className="font-bold text-slate-800">{calculateTotalLives()}</span>
-              </div>
-            </div>
-          </section>
-        </aside>
-          </div>
-
-          {/* Histórico ocupando a largura total */}
-          {history.length > 0 && (
-            <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
-                <Clock size={20} className="text-[#00995D]" />
-                Propostas Recentes
-              </h2>
-              <div className="flex flex-col gap-4">
-                {history.map((prop, idx) => (
-                  <div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100 text-sm shadow-sm transition-all hover:border-unimed-green/30">
-                    <div className="flex justify-between font-bold text-unimed-green mb-2">
-                      <span>Nº {prop.proposalNumber}</span>
-                      <span>{prop.date}</span>
-                    </div>
-                    <p className="text-slate-700 font-semibold break-words leading-tight">{prop.companyName || 'Sem Nome'}</p>
-                    <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-200/50">
-                      <div className="flex items-center gap-2">
-                        <p className="text-slate-500 text-xs break-words" title={prop.sellerName || '---'}>
-                          Vend: {prop.sellerName || '---'}
-                        </p>
-                        {prop.discount > 0 && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-unimed-green/10 text-unimed-green rounded flex-shrink-0">
-                            -{prop.discount}%
-                          </span>
-                        )}
+                ) : (
+                  <div className="space-y-1 mt-1 flex-1">
+                    {Object.keys(quantities).map((label, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-2 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="text-sm font-bold text-slate-700">{label}</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => updateQuantity(label, -1)}
+                            className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
+                          >
+                            <Minus size={16} />
+                          </button>
+                          <span className="w-8 text-center text-sm font-bold text-[#00995D]">{quantities[label]}</span>
+                          <button
+                            onClick={() => updateQuantity(label, 1)}
+                            className="p-1 hover:bg-slate-200 rounded-md transition-colors text-slate-600"
+                          >
+                            <Plus size={16} />
+                          </button>
+                        </div>
                       </div>
-                      {profile?.role !== 'seller' && prop.seller_id !== user?.id && (
-                        <span title="Vendedor diferente">
-                          <Shield size={14} className="text-slate-300" />
-                        </span>
-                      )}
+                    ))}
+                  </div>
+                )}
+
+                  <div className="pt-3 border-t border-slate-100 mt-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-bold text-slate-500 uppercase tracking-widest">Total de Vidas:</span>
+                      <span className="text-2xl font-black text-unimed-green">{calculateTotalLives()}</span>
                     </div>
                   </div>
-                ))}
-              </div>
-            </section>
-          )}
+
+                  <div className="p-4 pt-0">
+                    <button
+                      onClick={handleGenerateProposal}
+                      disabled={!isStep3Complete || isGenerating}
+                      className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${
+                        isStep3Complete 
+                          ? 'bg-[#00995D] text-white shadow-lg shadow-[#00995D]/20 hover:scale-[1.02] active:scale-95' 
+                          : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                      }`}
+                    >
+                      {isGenerating ? 'Gerando...' : 'Gerar Proposta Comercial'}
+                      {!isGenerating && <ArrowRight size={18} />}
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </section>
+
+        {/* Resumo da Seleção (Apenas Visual) */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-3 no-print shadow-sm">
+          <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 flex items-center gap-2">
+            <FileText size={14} className="text-slate-400" />
+            Resumo da Seleção
+          </h3>
+          <div className="space-y-2">
+            <div className="flex justify-between items-start gap-4">
+              <span className="text-xs text-slate-500 shrink-0">Empresa:</span>
+              <span className="text-xs font-bold text-slate-700 text-right">
+                {data.companyName || '---'}
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-500">Total de Vidas:</span>
+              <span className="text-xs font-bold text-unimed-green">
+                {calculateTotalLives()} vidas
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-500">Abrangência:</span>
+              <span className="text-xs font-bold text-slate-700">
+                {selectedCoverages.length === 0 
+                  ? '---' 
+                  : selectedCoverages.length === allCoverages.length 
+                    ? 'TODOS' 
+                    : selectedCoverages.join(', ')}
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-500">Acomodação:</span>
+              <span className="text-xs font-bold text-slate-700">
+                {selectedAccommodations.length === 0 
+                  ? '---' 
+                  : selectedAccommodations.length === allAccommodations.length 
+                    ? 'TODOS' 
+                    : selectedAccommodations.join(', ')}
+              </span>
+            </div>
+          </div>
+        </div>
+
         </div>
 
         {/* Coluna 3: Document Preview */}
@@ -775,7 +994,7 @@ export default function UnimedProposalGenerator() {
                     alt="Capa Unimed"
                     fill
                     className="object-cover opacity-90"
-                    referrerPolicy="no-referrer"
+                    referrerPolicy="no-referrer" priority
                   />
                   <div className="absolute inset-0 bg-gradient-to-b from-transparent to-white/20"></div>
                   <div className="absolute bottom-8 right-8 w-48 h-20">
@@ -784,7 +1003,7 @@ export default function UnimedProposalGenerator() {
                       alt="Logo Unimed"
                       fill
                       className="object-contain"
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="no-referrer" priority
                     />
                   </div>
                 </div>
@@ -843,7 +1062,7 @@ export default function UnimedProposalGenerator() {
                         alt="Logo Unimed"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                     <div className="flex flex-col">
@@ -857,7 +1076,7 @@ export default function UnimedProposalGenerator() {
                       alt="ANS"
                       fill
                       className="object-contain"
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="no-referrer" priority
                     />
                   </div>
                 </div>
@@ -879,7 +1098,7 @@ export default function UnimedProposalGenerator() {
                           alt="QR Code Unimed"
                           fill
                           className="object-contain"
-                          referrerPolicy="no-referrer"
+                          referrerPolicy="no-referrer" priority
                         />
                       </div>
                       <span className="text-[10px] text-slate-500 font-bold mt-1 text-center leading-tight">Conheça a Unimed</span>
@@ -892,7 +1111,7 @@ export default function UnimedProposalGenerator() {
                           alt="Mapa Unimed Brasil"
                           fill
                           className="object-contain"
-                          referrerPolicy="no-referrer"
+                          referrerPolicy="no-referrer" priority
                         />
                       </div>
                       
@@ -930,7 +1149,7 @@ export default function UnimedProposalGenerator() {
                           alt="Mapa de Rondônia - Área de Atuação"
                           fill
                           className="object-contain"
-                          referrerPolicy="no-referrer"
+                          referrerPolicy="no-referrer" priority
                         />
                       </div>
 
@@ -971,7 +1190,7 @@ export default function UnimedProposalGenerator() {
                         alt="Logo Unimed"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                     <div className="flex flex-col">
@@ -985,7 +1204,7 @@ export default function UnimedProposalGenerator() {
                       alt="ANS"
                       fill
                       className="object-contain"
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="no-referrer" priority
                     />
                   </div>
                 </div>
@@ -1000,7 +1219,7 @@ export default function UnimedProposalGenerator() {
                         alt="Nossos Serviços"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                     
@@ -1010,7 +1229,7 @@ export default function UnimedProposalGenerator() {
                         alt="Nossa Marca"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                   </div>
@@ -1032,7 +1251,7 @@ export default function UnimedProposalGenerator() {
                         alt="Logo Unimed"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                     <div className="flex flex-col">
@@ -1046,7 +1265,7 @@ export default function UnimedProposalGenerator() {
                       alt="ANS"
                       fill
                       className="object-contain"
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="no-referrer" priority
                     />
                   </div>
                 </div>
@@ -1061,7 +1280,7 @@ export default function UnimedProposalGenerator() {
                         alt="Assistência Unimed"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                     <div className="space-y-4 text-slate-700">
@@ -1152,7 +1371,7 @@ export default function UnimedProposalGenerator() {
                           alt="Logo Unimed"
                           fill
                           className="object-contain"
-                          referrerPolicy="no-referrer"
+                          referrerPolicy="no-referrer" priority
                         />
                       </div>
                       <div className="flex flex-col">
@@ -1166,7 +1385,7 @@ export default function UnimedProposalGenerator() {
                         alt="ANS"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                   </div>
@@ -1327,7 +1546,7 @@ export default function UnimedProposalGenerator() {
                         alt="Logo Unimed"
                         fill
                         className="object-contain"
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" priority
                       />
                     </div>
                     <div className="flex flex-col">
@@ -1341,7 +1560,7 @@ export default function UnimedProposalGenerator() {
                       alt="ANS"
                       fill
                       className="object-contain"
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="no-referrer" priority
                     />
                   </div>
                 </div>
@@ -1353,7 +1572,7 @@ export default function UnimedProposalGenerator() {
                       alt="Redes Sociais Unimed"
                       fill
                       className="object-contain"
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="no-referrer" priority
                     />
                   </div>
                 </div>
@@ -1451,6 +1670,184 @@ export default function UnimedProposalGenerator() {
                   Sim, imprimir
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Pop-up de Detalhes da Empresa (CNPJ) */}
+      <AnimatePresence>
+        {showCompanyModal && companyDetails && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm no-print">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col border border-slate-100"
+            >
+              {/* Header do Modal */}
+              <div className="bg-slate-50 px-8 py-4 border-b border-slate-200 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-[#00995D]/10 rounded-xl flex items-center justify-center text-[#00995D]">
+                    <Building2 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-800 tracking-tight">Detalhes da Empresa</h3>
+                    <p className="text-[10px] font-bold text-[#00995D] uppercase tracking-widest">CNPJ Válido!</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={handleCloseCompanyModal}
+                  className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400"
+                >
+                  <Plus className="rotate-45" size={24} />
+                </button>
+              </div>
+
+              {/* Conteúdo do Modal */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                
+                {/* Grid de Informações Básicas */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4 border-b border-slate-100 pb-6">
+                  <div className="md:col-span-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Situação Cadastral</p>
+                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                      (companyDetails.descricao_situacao_cadastral || companyDetails.situacao) === 'ATIVA' 
+                        ? 'bg-green-50 text-green-600 border border-green-100' 
+                        : 'bg-amber-50 text-amber-600 border border-amber-100'
+                    }`}>
+                      {companyDetails.descricao_situacao_cadastral || companyDetails.situacao || '---'}
+                    </span>
+                  </div>
+                  
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Data de Abertura</p>
+                    <p className="text-sm font-bold text-slate-700">{companyDetails.data_inicio_atividade || companyDetails.data_abertura || '---'}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">CNPJ</p>
+                    <p className="text-sm font-bold text-slate-700">{companyDetails.cnpj || data.cnpj}</p>
+                  </div>
+
+                  <div className="md:col-span-3 mt-2">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Razão Social</p>
+                    <p className="text-base font-black text-slate-800 uppercase leading-tight">{companyDetails.razao_social || '---'}</p>
+                  </div>
+
+                  <div className="md:col-span-3">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Nome Fantasia</p>
+                    <p className="text-sm font-bold text-slate-600 uppercase">{companyDetails.nome_fantasia || companyDetails.razao_social || '---'}</p>
+                  </div>
+                </div>
+
+                {/* Contato e Localização com mais respiro */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-3">
+                    <h4 className="text-[11px] font-black text-slate-800 flex items-center gap-2">
+                      <User size={14} className="text-[#00995D]" />
+                      Contato
+                    </h4>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-slate-600">
+                        <Info size={14} className="shrink-0" />
+                        <span className="text-xs font-medium">{companyDetails.email || 'Email não informado'}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-slate-600">
+                        <Info size={14} className="shrink-0" />
+                        <span className="text-xs font-medium">{companyDetails.ddd_telefone_1 || companyDetails.telefone || 'Telefone não informado'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-3">
+                    <h4 className="text-[11px] font-black text-slate-800 flex items-center gap-2">
+                      <MapPin size={14} className="text-[#00995D]" />
+                      Localização
+                    </h4>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {companyDetails.logradouro || '---'}, {companyDetails.numero || 'S/N'} - {companyDetails.bairro || '---'}<br />
+                      {companyDetails.municipio || '---'} / {companyDetails.uf || '---'}<br />
+                      CEP: {companyDetails.cep || '---'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Sócios (Se houver) - Com Rolagem Interna */}
+                {(companyDetails.qsa || companyDetails.socios) && (
+                  <div className="space-y-2">
+                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1 flex items-center gap-2">
+                      <ShieldCheck size={12} className="text-[#00995D]" />
+                      Quadro de Sócios e Administradores
+                    </h4>
+                    <div className="bg-white rounded-xl border border-slate-100 overflow-hidden shadow-sm">
+                      <div className="max-h-[200px] overflow-y-auto divide-y divide-slate-50 custom-scrollbar">
+                        {(companyDetails.qsa || companyDetails.socios).map((socio: any, idx: number) => (
+                          <div key={idx} className="px-4 py-2.5 flex justify-between items-center hover:bg-slate-50 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className="w-6 h-6 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
+                                <User size={12} />
+                              </div>
+                              <span className="text-[11px] font-bold text-slate-700 uppercase">
+                                {socio.nome || socio.nome_socio}
+                              </span>
+                            </div>
+                            <span className="text-[9px] font-black text-[#00995D] bg-[#00995D]/5 px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                              {socio.qualificacao || socio.qualificacao_socio || 'Sócio'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer do Modal */}
+              <div className="p-6 border-t border-slate-100 flex gap-3 bg-white">
+                <button
+                  onClick={handleCloseCompanyModal}
+                  className="flex-1 px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-all"
+                >
+                  Fechar
+                </button>
+                <button
+                  onClick={handleConfirmCompanyModal}
+                  className="flex-1 px-6 py-3 rounded-xl font-bold text-white bg-[#00995D] hover:bg-[#007D4C] shadow-lg shadow-[#00995D]/20 transition-all active:scale-95"
+                >
+                  Confirmar Dados
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Pop-up de Erro */}
+      <AnimatePresence>
+        {errorMessage && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm no-print">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full text-center space-y-6 border border-slate-100"
+            >
+              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+                <AlertCircle className="text-red-500" size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-black text-slate-800 tracking-tight">Atenção</h3>
+                <p className="text-slate-500 text-sm leading-relaxed">
+                  {errorMessage}
+                </p>
+              </div>
+              <button
+                onClick={() => setErrorMessage('')}
+                className="w-full px-4 py-3 rounded-xl font-bold text-white bg-unimed-green hover:bg-[#007c4b] shadow-lg shadow-unimed-green/20 transition-all active:scale-95"
+              >
+                Entendi
+              </button>
             </motion.div>
           </div>
         )}

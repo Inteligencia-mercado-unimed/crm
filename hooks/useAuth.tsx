@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react';
+'use client';
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
@@ -9,7 +11,21 @@ export interface Profile {
   role: 'seller' | 'manager' | 'admin';
 }
 
-export function useAuth() {
+interface AuthContextType {
+  user: User | null;
+  profile: Profile | null;
+  loading: boolean;
+  signOut: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  profile: null,
+  loading: true,
+  signOut: async () => {},
+});
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,26 +76,31 @@ export function useAuth() {
 
   useEffect(() => {
     if (!supabase) {
-      setLoading(false);
+      setTimeout(() => setLoading(false), 0);
       return;
     }
     
+    let isMounted = true;
+
     const checkSession = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
+        if (session && isMounted) {
           setUser(session.user);
           await fetchProfile(session.user.id, session.user.email, session.user.user_metadata);
         }
       } catch (err) {
         // fail
+      } finally {
+        if (isMounted) setLoading(false);
       }
-      setLoading(false);
     };
 
     checkSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
+      if (!isMounted) return;
+      
       if (session) {
         setUser(session.user);
         await fetchProfile(session.user.id, session.user.email, session.user.user_metadata);
@@ -90,7 +111,10 @@ export function useAuth() {
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {
@@ -101,5 +125,13 @@ export function useAuth() {
     }
   };
 
-  return { user, profile, loading, signOut };
+  return (
+    <AuthContext.Provider value={{ user, profile, loading, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  return useContext(AuthContext);
 }
