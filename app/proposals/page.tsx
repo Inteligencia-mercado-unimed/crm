@@ -23,6 +23,14 @@ function ProposalsContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  
+  // New State for Sorting and Filtering
+  const [sortBy, setSortBy] = useState<string>('created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [sellerFilter, setSellerFilter] = useState<string>('all');
+  const [isSortOpen, setIsSortOpen] = useState(false);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
   const searchParams = useSearchParams();
   const cnpjParam = searchParams.get('cnpj');
 
@@ -76,25 +84,56 @@ function ProposalsContent() {
     return () => window.removeEventListener('focus', fetchProposals);
   }, [user]);
 
-  const filteredProposals = proposals.filter((p: any) => {
-    const search = searchTerm.toLowerCase();
-    const company = (p.company_name || p.companyName || '').toLowerCase();
-    const seller = (p.seller_name || p.sellerName || '').toLowerCase();
-    const number = (p.proposal_number || p.proposalNumber || '').toLowerCase();
-    const cnpj = (p.cnpj || '').toLowerCase();
-    
-    // Versão limpa para busca flexível
-    const cleanSearch = search.replace(/\D/g, '');
-    const cleanCNPJ = cnpj.replace(/\D/g, '');
-    
-    return (
-      company.includes(search) || 
-      seller.includes(search) || 
-      number.includes(search) || 
-      cnpj.includes(search) ||
-      (cleanSearch !== '' && cleanCNPJ.includes(cleanSearch))
-    );
-  });
+  // Get unique sellers for filter
+  const uniqueSellers = Array.from(new Set(allRows.map(p => p.seller_name || p.sellerName || '---'))).filter(s => s !== '---').sort();
+
+  const filteredProposals = proposals
+    .filter((p: any) => {
+      const search = searchTerm.toLowerCase();
+      const company = (p.company_name || p.companyName || '').toLowerCase();
+      const seller = (p.seller_name || p.sellerName || '').toLowerCase();
+      const number = (p.proposal_number || p.proposalNumber || '').toLowerCase();
+      const cnpj = (p.cnpj || '').toLowerCase();
+      
+      // Versão limpa para busca flexível
+      const cleanSearch = search.replace(/\D/g, '');
+      const cleanCNPJ = cnpj.replace(/\D/g, '');
+      
+      const matchesSearch = (
+        company.includes(search) || 
+        seller.includes(search) || 
+        number.includes(search) || 
+        cnpj.includes(search) ||
+        (cleanSearch !== '' && cleanCNPJ.includes(cleanSearch))
+      );
+
+      const matchesSeller = sellerFilter === 'all' || (p.seller_name || p.sellerName) === sellerFilter;
+
+      return matchesSearch && matchesSeller;
+    })
+    .sort((a, b) => {
+      let valA, valB;
+      
+      if (sortBy === 'created_at') {
+        valA = new Date(a.created_at).getTime();
+        valB = new Date(b.created_at).getTime();
+      } else if (sortBy === 'company_name') {
+        valA = (a.company_name || a.companyName || '').toLowerCase();
+        valB = (b.company_name || b.companyName || '').toLowerCase();
+      } else if (sortBy === 'total_value') {
+        valA = a.total_value || a.totalValue || 0;
+        valB = b.total_value || b.totalValue || 0;
+      } else if (sortBy === 'total_lives') {
+        valA = a.total_lives || a.totalLives || 0;
+        valB = b.total_lives || b.totalLives || 0;
+      } else {
+        return 0;
+      }
+
+      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -156,14 +195,112 @@ function ProposalsContent() {
           </div>
           
           <div className="flex gap-2">
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 font-bold text-sm hover:bg-slate-50 transition-colors">
-              <Filter size={18} />
-              Filtros
-            </button>
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 font-bold text-sm hover:bg-slate-50 transition-colors">
-              <ArrowUpDown size={18} />
-              Ordenar
-            </button>
+            <div className="relative">
+              <button 
+                onClick={() => {
+                  setIsFilterOpen(!isFilterOpen);
+                  setIsSortOpen(false);
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 font-bold text-sm hover:bg-slate-50 transition-colors ${sellerFilter !== 'all' ? 'border-[#00995D] bg-[#00995D]/5 text-[#00995D]' : ''}`}
+              >
+                <Filter size={18} />
+                Filtros
+                {sellerFilter !== 'all' && <span className="w-2 h-2 bg-[#00995D] rounded-full"></span>}
+              </button>
+
+              <AnimatePresence>
+                {isFilterOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setIsFilterOpen(false)}></div>
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 z-20 space-y-4"
+                    >
+                      <div>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Vendedor</p>
+                        <select 
+                          value={sellerFilter}
+                          onChange={(e) => setSellerFilter(e.target.value)}
+                          className="w-full p-2 bg-slate-50 border border-slate-100 rounded-lg text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-[#00995D]"
+                        >
+                          <option value="all">Todos os Vendedores</option>
+                          {uniqueSellers.map(seller => (
+                            <option key={seller} value={seller}>{seller}</option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      <button 
+                        onClick={() => {
+                          setSellerFilter('all');
+                          setIsFilterOpen(false);
+                        }}
+                        className="w-full py-2 text-[10px] font-black text-slate-400 uppercase hover:text-red-500 transition-colors"
+                      >
+                        Limpar Filtros
+                      </button>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <div className="relative">
+              <button 
+                onClick={() => {
+                  setIsSortOpen(!isSortOpen);
+                  setIsFilterOpen(false);
+                }}
+                className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 font-bold text-sm hover:bg-slate-50 transition-colors"
+              >
+                <ArrowUpDown size={18} />
+                Ordenar
+              </button>
+
+              <AnimatePresence>
+                {isSortOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setIsSortOpen(false)}></div>
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 p-2 z-20"
+                    >
+                      {[
+                        { id: 'created_at', label: 'Data de Emissão' },
+                        { id: 'company_name', label: 'Nome da Empresa' },
+                        { id: 'total_value', label: 'Valor Total' },
+                        { id: 'total_lives', label: 'Total de Vidas' },
+                      ].map((option) => (
+                        <button
+                          key={option.id}
+                          onClick={() => {
+                            if (sortBy === option.id) {
+                              setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+                            } else {
+                              setSortBy(option.id);
+                              setSortOrder('desc');
+                            }
+                            setIsSortOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-bold transition-colors ${
+                            sortBy === option.id ? 'bg-[#00995D]/10 text-[#00995D]' : 'text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          {option.label}
+                          {sortBy === option.id && (
+                            sortOrder === 'asc' ? <ChevronUp size={16} /> : <ChevronDown size={16} />
+                          )}
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
 

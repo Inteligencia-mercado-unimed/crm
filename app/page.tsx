@@ -25,7 +25,12 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
-  ArrowRight
+  ArrowRight,
+  Save,
+  Archive,
+  X,
+  Trash2,
+  FolderOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -94,6 +99,108 @@ export default function UnimedProposalGenerator() {
   const [errorMessage, setErrorMessage] = useState('');
   const [openSection, setOpenSection] = useState<'dados' | 'filtros' | 'vidas' | ''>('dados');
   const previewRef = useRef<HTMLDivElement>(null);
+
+  // --- Drafts / Templates / Archive ---
+  const [activePanel, setActivePanel] = useState<'drafts' | 'templates' | 'archive' | null>(null);
+  const [drafts, setDrafts] = useState<any[]>([]);
+  const [draftName, setDraftName] = useState('');
+  const [showSaveDraft, setShowSaveDraft] = useState(false);
+  const [isDraftSaving, setIsDraftSaving] = useState(false);
+
+  const useSupabaseDrafts = !!process.env.NEXT_PUBLIC_SUPABASE_URL && !!user;
+
+  // Load drafts — Supabase first, localStorage as fallback
+  const fetchDrafts = async () => {
+    if (useSupabaseDrafts) {
+      const { data: rows, error } = await supabase
+        .from('drafts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (!error && rows) {
+        setDrafts(rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          createdAt: r.created_at,
+          data: r.data,
+          selectedCoverages: r.selected_coverages,
+          selectedAccommodations: r.selected_accommodations,
+          quantities: r.quantities,
+        })));
+        return;
+      }
+    }
+    // Fallback: localStorage
+    const saved = JSON.parse(localStorage.getItem('unimed_drafts') || '[]');
+    setDrafts(saved);
+  };
+
+  useEffect(() => {
+    if (user !== undefined) fetchDrafts();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  const saveDraft = async () => {
+    if (!draftName.trim()) return;
+    setIsDraftSaving(true);
+    try {
+      if (useSupabaseDrafts) {
+        const { data: row, error } = await supabase.from('drafts').insert({
+          user_id: user!.id,
+          name: draftName.trim(),
+          data: data as any,
+          selected_coverages: selectedCoverages,
+          selected_accommodations: selectedAccommodations,
+          quantities: quantities as any,
+        }).select().single();
+        if (!error && row) {
+          await fetchDrafts();
+          setDraftName('');
+          setShowSaveDraft(false);
+          return;
+        }
+      }
+      // Fallback: localStorage
+      const draft = {
+        id: Date.now(),
+        name: draftName.trim(),
+        createdAt: new Date().toISOString(),
+        data, selectedCoverages, selectedAccommodations, quantities,
+      };
+      const updated = [draft, ...drafts].slice(0, 20);
+      setDrafts(updated);
+      localStorage.setItem('unimed_drafts', JSON.stringify(updated));
+      setDraftName('');
+      setShowSaveDraft(false);
+    } finally {
+      setIsDraftSaving(false);
+    }
+  };
+
+  const deleteDraft = async (id: string | number) => {
+    if (useSupabaseDrafts && typeof id === 'string') {
+      await supabase.from('drafts').delete().eq('id', id);
+      setDrafts(prev => prev.filter(d => d.id !== id));
+      return;
+    }
+    // Fallback: localStorage
+    const updated = drafts.filter(d => d.id !== id);
+    setDrafts(updated);
+    localStorage.setItem('unimed_drafts', JSON.stringify(updated));
+  };
+
+  const loadDraft = (draft: any, deleteAfter = false) => {
+    setData(draft.data);
+    setSelectedCoverages(draft.selectedCoverages || []);
+    setSelectedAccommodations(draft.selectedAccommodations || []);
+    setQuantities(draft.quantities || {});
+    setActivePanel(null);
+    if (deleteAfter) deleteDraft(draft.id);
+  };
+
+  const togglePanel = (panel: 'drafts' | 'templates' | 'archive') => {
+    setActivePanel(prev => prev === panel ? null : panel);
+  };
 
   const allCoverages = Array.from(new Set(plans.map(p => p.coverage)));
   const allAccommodations = Array.from(new Set(plans.map(p => p.accommodation)));
@@ -544,6 +651,9 @@ export default function UnimedProposalGenerator() {
     window.location.reload();
   };
 
+  const formatCurrencyShort = (v: number) =>
+    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
       {/* Header */}
@@ -581,10 +691,35 @@ export default function UnimedProposalGenerator() {
         </div>
 
         <div className="flex gap-6 items-center">
-          <div className="flex gap-4 no-print mr-4 border-r border-slate-100 pr-6">
-            <button className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors">Drafts</button>
-            <button className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors">Templates</button>
-            <button className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors">Archive</button>
+          <div className="flex gap-2 no-print mr-4 border-r border-slate-100 pr-6">
+            <button
+              onClick={() => togglePanel('drafts')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${
+                activePanel === 'drafts' ? 'bg-amber-50 text-amber-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <Save size={14} />
+              Drafts
+              {drafts.length > 0 && <span className="text-[10px] bg-amber-100 text-amber-600 rounded-full px-1.5 font-black">{drafts.length}</span>}
+            </button>
+            <button
+              onClick={() => togglePanel('templates')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${
+                activePanel === 'templates' ? 'bg-violet-50 text-violet-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <FolderOpen size={14} />
+              Templates
+            </button>
+            <button
+              onClick={() => togglePanel('archive')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${
+                activePanel === 'archive' ? 'bg-blue-50 text-blue-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <Archive size={14} />
+              Arquivo
+            </button>
           </div>
           <button
             onClick={() => window.location.reload()}
@@ -1850,6 +1985,233 @@ export default function UnimedProposalGenerator() {
               </button>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== SLIDE-OUT PANELS ===== */}
+      <AnimatePresence>
+        {activePanel && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              key="panel-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setActivePanel(null)}
+              className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-sm no-print"
+            />
+
+            {/* Panel */}
+            <motion.div
+              key="panel-content"
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 280 }}
+              className="fixed top-0 right-0 h-full w-full max-w-md bg-white shadow-2xl z-50 flex flex-col no-print"
+            >
+              {/* Panel Header */}
+              <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  {activePanel === 'drafts' && (
+                    <>
+                      <div className="w-9 h-9 bg-amber-50 rounded-xl flex items-center justify-center text-amber-500"><Save size={18} /></div>
+                      <div>
+                        <h2 className="text-base font-black text-slate-800">Rascunhos</h2>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Propostas salvas localmente</p>
+                      </div>
+                    </>
+                  )}
+                  {activePanel === 'templates' && (
+                    <>
+                      <div className="w-9 h-9 bg-violet-50 rounded-xl flex items-center justify-center text-violet-500"><FolderOpen size={18} /></div>
+                      <div>
+                        <h2 className="text-base font-black text-slate-800">Templates</h2>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Carregar rascunho como base</p>
+                      </div>
+                    </>
+                  )}
+                  {activePanel === 'archive' && (
+                    <>
+                      <div className="w-9 h-9 bg-blue-50 rounded-xl flex items-center justify-center text-blue-500"><Archive size={18} /></div>
+                      <div>
+                        <h2 className="text-base font-black text-slate-800">Arquivo</h2>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Histórico de propostas emitidas</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <button onClick={() => setActivePanel(null)} className="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400 transition-colors">
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Panel Body */}
+              <div className="flex-1 overflow-y-auto">
+
+                {/* ---- DRAFTS PANEL ---- */}
+                {activePanel === 'drafts' && (
+                  <div className="p-6 space-y-4">
+                    {/* Sync mode indicator */}
+                    <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold ${useSupabaseDrafts ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                      <div className={`w-1.5 h-1.5 rounded-full ${useSupabaseDrafts ? 'bg-green-500' : 'bg-amber-500'}`} />
+                      {useSupabaseDrafts ? '☁️ Sincronizado na nuvem — disponível em qualquer dispositivo' : '💻 Salvo localmente neste navegador'}
+                    </div>
+
+                    {/* Save current draft */}
+                    <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 space-y-3">
+                      <p className="text-xs font-black text-amber-700 uppercase tracking-widest">Salvar rascunho atual</p>
+                      {showSaveDraft ? (
+                        <div className="flex gap-2">
+                          <input
+                            autoFocus
+                            type="text"
+                            placeholder="Nome do rascunho..."
+                            value={draftName}
+                            onChange={e => setDraftName(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && saveDraft()}
+                            className="flex-1 px-3 py-2 text-sm font-medium border border-amber-200 rounded-xl outline-none focus:ring-2 focus:ring-amber-400 bg-white"
+                          />
+                          <button onClick={saveDraft} disabled={isDraftSaving} className="px-4 py-2 bg-amber-500 text-white rounded-xl font-bold text-sm hover:bg-amber-600 transition-colors disabled:opacity-60">
+                            {isDraftSaving ? '...' : 'Salvar'}
+                          </button>
+                          <button onClick={() => setShowSaveDraft(false)} className="px-3 py-2 text-slate-400 hover:text-slate-600 transition-colors"><X size={16} /></button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setShowSaveDraft(true)}
+                          className="w-full flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-sm transition-colors"
+                        >
+                          <Save size={16} />
+                          Salvar estado atual como rascunho
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Draft list */}
+                    {drafts.length === 0 ? (
+                      <div className="text-center py-12 space-y-3">
+                        <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto text-slate-300"><Save size={24} /></div>
+                        <p className="text-sm font-bold text-slate-400">Nenhum rascunho salvo ainda.</p>
+                        <p className="text-xs text-slate-300">Salve o estado atual para retomar depois.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Rascunhos salvos ({drafts.length})</p>
+                        {drafts.map(draft => (
+                          <div key={draft.id} className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between gap-3 hover:border-amber-200 hover:bg-amber-50/30 transition-all group">
+                            <button onClick={() => loadDraft(draft, true)} className="flex-1 text-left space-y-1" title="Carregar e remover rascunho">
+                              <p className="text-sm font-black text-slate-800 group-hover:text-amber-700">{draft.name}</p>
+                              <p className="text-[10px] font-bold text-slate-400">{draft.data?.companyName || 'Sem empresa'} · {new Date(draft.createdAt).toLocaleDateString('pt-BR')}</p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {draft.selectedCoverages?.map((c: string) => (
+                                  <span key={c} className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full uppercase">{c}</span>
+                                ))}
+                                {draft.selectedAccommodations?.map((a: string) => (
+                                  <span key={a} className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full uppercase">{a}</span>
+                                ))}
+                                <span className="text-[9px] font-bold bg-green-50 text-green-600 px-1.5 py-0.5 rounded-full">
+                                  {Object.values(draft.quantities || {}).reduce((a: number, b) => a + Number(b), 0)} vidas
+                                </span>
+                              </div>
+                            </button>
+                            <button onClick={() => deleteDraft(draft.id)} className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all shrink-0">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ---- TEMPLATES PANEL ---- */}
+                {activePanel === 'templates' && (
+                  <div className="p-6 space-y-4">
+                    <div className="bg-violet-50 border border-violet-100 rounded-2xl p-4">
+                      <p className="text-xs font-black text-violet-700 uppercase tracking-widest mb-1">Como funciona</p>
+                      <p className="text-xs text-violet-600 leading-relaxed">Carregue um rascunho salvo como base para uma nova proposta. O número da proposta será mantido sequencial.</p>
+                    </div>
+
+                    {drafts.length === 0 ? (
+                      <div className="text-center py-12 space-y-3">
+                        <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto text-slate-300"><FolderOpen size={24} /></div>
+                        <p className="text-sm font-bold text-slate-400">Nenhum template disponível.</p>
+                        <p className="text-xs text-slate-300">Salve rascunhos na aba Drafts para usá-los como template.</p>
+                        <button onClick={() => setActivePanel('drafts')} className="mt-2 px-4 py-2 bg-violet-500 text-white rounded-xl font-bold text-sm hover:bg-violet-600 transition-colors">
+                          Ir para Drafts
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Selecione um template</p>
+                        {drafts.map(draft => (
+                          <button
+                            key={draft.id}
+                            onClick={() => {
+                              // Load draft but keep current proposal number
+                              const currentNumber = data.proposalNumber;
+                              loadDraft(draft);
+                              setData(prev => ({ ...prev, proposalNumber: currentNumber }));
+                            }}
+                            className="w-full text-left bg-white border border-slate-200 rounded-2xl p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-all group space-y-1"
+                          >
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-black text-slate-800 group-hover:text-violet-700">{draft.name}</p>
+                              <span className="text-[10px] font-bold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full uppercase">Usar</span>
+                            </div>
+                            <p className="text-[10px] font-bold text-slate-400">{draft.data?.companyName || 'Sem empresa definida'}</p>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {draft.selectedCoverages?.map((c: string) => (
+                                <span key={c} className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full uppercase">{c}</span>
+                              ))}
+                              {draft.selectedAccommodations?.map((a: string) => (
+                                <span key={a} className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full uppercase">{a}</span>
+                              ))}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ---- ARCHIVE PANEL ---- */}
+                {activePanel === 'archive' && (
+                  <div className="p-6 space-y-4">
+                    {history.length === 0 ? (
+                      <div className="text-center py-12 space-y-3">
+                        <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto text-slate-300"><Archive size={24} /></div>
+                        <p className="text-sm font-bold text-slate-400">Nenhuma proposta emitida ainda.</p>
+                        <p className="text-xs text-slate-300">As propostas geradas aparecerão aqui.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Últimas propostas emitidas ({history.length})</p>
+                        {history.map((prop: any, idx: number) => (
+                          <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2 hover:border-blue-200 hover:bg-blue-50/20 transition-all">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-black text-[#00995D]">#{prop.proposalNumber || prop.proposal_number}</span>
+                              <span className="text-[10px] font-bold bg-green-50 text-green-600 px-2 py-0.5 rounded-full uppercase">Emitida</span>
+                            </div>
+                            <p className="text-sm font-bold text-slate-800 leading-tight">{prop.companyName || prop.company_name || 'Sem nome'}</p>
+                            <p className="text-[10px] font-bold text-slate-400">{prop.sellerName || prop.seller_name || '---'} · {prop.date || new Date(prop.created_at).toLocaleDateString('pt-BR')}</p>
+                            <div className="flex items-center justify-between border-t border-slate-50 pt-2">
+                              <span className="text-[10px] font-black text-slate-400 uppercase">{prop.totalLives || prop.total_lives || 0} vidas</span>
+                              <span className="text-sm font-black text-slate-900">
+                                {formatCurrencyShort(Number(prop.totalValue || prop.total_value || 0))}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
     </div>
