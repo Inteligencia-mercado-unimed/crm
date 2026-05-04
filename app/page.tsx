@@ -479,6 +479,29 @@ export default function UnimedProposalGenerator() {
     return plan.ageGroups.reduce((acc, group) => acc + (group.value * (quantities[group.label] || 0)), 0);
   };
 
+  const resetForm = () => {
+    // Reset data except proposal number (which will be updated by useEffect)
+    setData(prev => ({
+      ...prev,
+      cnpj: '',
+      companyName: '',
+      responsible: '',
+      discount: 0,
+    }));
+    setQuantities({});
+    setSelectedCoverages([]);
+    setSelectedAccommodations([]);
+    setCompanyDetails(null);
+    setShowPrintModal(false);
+    setIsGenerating(false);
+    
+    // Trigger proposal number increment by updating localStorage
+    const currentNum = data.proposalNumber;
+    localStorage.setItem('unimed_last_proposal_number', currentNum);
+    const nextNum = (parseInt(currentNum) + 1).toString().padStart(4, '0');
+    setData(prev => ({ ...prev, proposalNumber: nextNum }));
+  };
+
   const calculateTotalLives = () => {
     return Object.values(quantities).reduce((acc, q) => acc + q, 0);
   };
@@ -604,22 +627,21 @@ export default function UnimedProposalGenerator() {
       }
     }
 
-    // Always save to localStorage as backup/fallback
-    const localHistory = JSON.parse(localStorage.getItem('unimed_proposals_history') || '[]');
-    const newProposal = {
-      ...data,
-      id: Date.now(),
-      totalLives: calculateTotalLives(),
-      totalValue: plans.reduce((acc, plan) => acc + calculatePlanTotal(plan), 0)
-    };
-    localHistory.push(newProposal);
-    localStorage.setItem('unimed_proposals_history', JSON.stringify(localHistory));
-
+    // Always save to localStorage as backup/fallback ONLY if not using Supabase
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      const localHistory = JSON.parse(localStorage.getItem('unimed_proposals_history') || '[]');
+      const newProposal = {
+        ...data,
+        id: Date.now(),
+        totalLives: calculateTotalLives(),
+        totalValue: plans.reduce((acc, plan) => acc + calculatePlanTotal(plan), 0)
+      };
+      localHistory.push(newProposal);
+      localStorage.setItem('unimed_proposals_history', JSON.stringify(localHistory));
       setHistory(localHistory.slice().reverse().slice(0, 5));
     }
 
-    // 2. Save last used number
+    // 2. Save last used number (resetForm will handle increment)
     localStorage.setItem('unimed_last_proposal_number', data.proposalNumber);
 
     // 3. Abrir Modal de Impressão
@@ -643,12 +665,12 @@ export default function UnimedProposalGenerator() {
     document.title = originalTitle;
     
     setShowPrintModal(false);
-    window.location.reload();
+    resetForm();
   };
 
   const handleCancelPrint = () => {
     setShowPrintModal(false);
-    window.location.reload();
+    resetForm();
   };
 
   const formatCurrencyShort = (v: number) =>
@@ -722,7 +744,7 @@ export default function UnimedProposalGenerator() {
             </button>
           </div>
           <button
-            onClick={() => window.location.reload()}
+            onClick={resetForm}
             className="px-4 py-2 text-slate-400 hover:text-slate-600 font-bold text-sm transition-colors"
           >
             Limpar
