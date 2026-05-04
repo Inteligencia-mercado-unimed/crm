@@ -118,7 +118,7 @@ export default function UnimedProposalGenerator() {
         .order('created_at', { ascending: false })
         .limit(20);
       if (!error && rows) {
-        setDrafts(rows.map(r => ({
+        setDrafts(rows.map((r: any) => ({
           id: r.id,
           name: r.name,
           createdAt: r.created_at,
