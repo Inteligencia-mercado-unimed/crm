@@ -76,44 +76,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!supabase) {
-      setTimeout(() => setLoading(false), 0);
+      setLoading(false);
       return;
     }
     
     let isMounted = true;
 
+    // Safety timeout: Never stay loading more than 6 seconds
+    const timeoutId = setTimeout(() => {
+      if (isMounted && loading) {
+        console.warn('Auth loading timed out. Forcing ready state.');
+        setLoading(false);
+      }
+    }, 6000);
+
     const checkSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        
         if (session && isMounted) {
           setUser(session.user);
-          await fetchProfile(session.user.id, session.user.email, session.user.user_metadata);
+          // Don't await fetchProfile to avoid blocking the main UI if DB is slow
+          fetchProfile(session.user.id, session.user.email, session.user.user_metadata);
         }
       } catch (err) {
-        // fail
+        console.error('Session check error:', err);
       } finally {
-        if (isMounted) setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+          clearTimeout(timeoutId);
+        }
       }
     };
 
     checkSession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
       
       if (session) {
         setUser(session.user);
-        await fetchProfile(session.user.id, session.user.email, session.user.user_metadata);
+        fetchProfile(session.user.id, session.user.email, session.user.user_metadata);
       } else {
         setUser(null);
         setProfile(null);
       }
       setLoading(false);
+      clearTimeout(timeoutId);
     });
 
     return () => {
       isMounted = false;
       subscription.unsubscribe();
+      clearTimeout(timeoutId);
     };
   }, []);
 
