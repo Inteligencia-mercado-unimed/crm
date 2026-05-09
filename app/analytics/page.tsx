@@ -97,75 +97,94 @@ export default function AnalyticsPage() {
     return new Date('2000-01-01');
   }, [period]);
 
-  // Deduplicate by proposal_number
-  const deduped = useMemo(() => {
+  // Filter all proposals by period first (raw data)
+  const filteredRaw = useMemo(() => 
+    allProposals.filter(p => new Date(p.created_at) >= periodStart),
+    [allProposals, periodStart]
+  );
+
+  const prevFilteredRaw = useMemo(() =>
+    allProposals.filter(p => new Date(p.created_at) >= prevPeriodStart && new Date(p.created_at) < periodStart),
+    [allProposals, prevPeriodStart, periodStart]
+  );
+
+  // Deduplicate for counting unique proposals
+  const dedupedFiltered = useMemo(() => {
     const seen = new Set();
-    return allProposals.filter(p => {
+    return filteredRaw.filter(p => {
       const id = p.proposal_number || p.proposalNumber;
       if (seen.has(id)) return false;
       seen.add(id);
       return true;
     });
-  }, [allProposals]);
+  }, [filteredRaw]);
 
-  const filtered = useMemo(() =>
-    deduped.filter(p => new Date(p.created_at) >= periodStart),
-    [deduped, periodStart]
-  );
-
-  const prevFiltered = useMemo(() =>
-    deduped.filter(p => new Date(p.created_at) >= prevPeriodStart && new Date(p.created_at) < periodStart),
-    [deduped, prevPeriodStart, periodStart]
-  );
+  const dedupedPrev = useMemo(() => {
+    const seen = new Set();
+    return prevFilteredRaw.filter(p => {
+      const id = p.proposal_number || p.proposalNumber;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }, [prevFilteredRaw]);
 
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
 
-  const totalValue = useMemo(() => filtered.reduce((a, p) => a + Number(p.total_value || 0), 0), [filtered]);
-  const totalLives = useMemo(() => filtered.reduce((a, p) => a + Number(p.total_lives || 0), 0), [filtered]);
-  const avgTicket = filtered.length > 0 ? totalValue / filtered.length : 0;
+  const totalValue = useMemo(() => filteredRaw.reduce((a, p) => a + Number(p.total_value || 0), 0), [filteredRaw]);
+  const totalLives = useMemo(() => filteredRaw.reduce((a, p) => a + Number(p.lives_count || p.total_lives || 0), 0), [filteredRaw]);
+  const avgTicket = dedupedFiltered.length > 0 ? totalValue / dedupedFiltered.length : 0;
   const avgValuePerLife = totalLives > 0 ? totalValue / totalLives : 0;
 
-  const prevTotalValue = useMemo(() => prevFiltered.reduce((a, p) => a + Number(p.total_value || 0), 0), [prevFiltered]);
-  const prevCount = prevFiltered.length;
+  const prevTotalValue = useMemo(() => prevFilteredRaw.reduce((a, p) => a + Number(p.total_value || 0), 0), [prevFilteredRaw]);
+  const prevCount = dedupedPrev.length;
 
-  const trendCount = prevCount === 0 ? null : ((filtered.length - prevCount) / prevCount * 100).toFixed(0) + '%';
+  const trendCount = prevCount === 0 ? null : ((dedupedFiltered.length - prevCount) / prevCount * 100).toFixed(0) + '%';
   const trendValue = prevTotalValue === 0 ? null : ((totalValue - prevTotalValue) / prevTotalValue * 100).toFixed(0) + '%';
 
   // Monthly evolution
   const monthlyData = useMemo(() => {
-    const map = new Map<string, { label: string; propostas: number; valor: number; vidas: number }>();
+    const map = new Map<string, { label: string; propostas: number; valor: number; vidas: number; seen: Set<string> }>();
     const months = period === '30d' ? 2 : period === '90d' ? 3 : period === '180d' ? 6 : 12;
     for (let i = months - 1; i >= 0; i--) {
       const d = subMonths(new Date(), i);
       const key = format(d, 'yyyy-MM');
-      map.set(key, { label: format(d, 'MMM/yy', { locale: ptBR }), propostas: 0, valor: 0, vidas: 0 });
+      map.set(key, { label: format(d, 'MMM/yy', { locale: ptBR }), propostas: 0, valor: 0, vidas: 0, seen: new Set() });
     }
-    deduped.forEach(p => {
+    allProposals.forEach(p => {
       const key = format(new Date(p.created_at), 'yyyy-MM');
       if (map.has(key)) {
         const curr = map.get(key)!;
-        curr.propostas++;
+        const id = p.proposal_number || p.proposalNumber;
+        if (!curr.seen.has(id)) {
+          curr.seen.add(id);
+          curr.propostas++;
+        }
         curr.valor += Number(p.total_value || 0);
-        curr.vidas += Number(p.total_lives || 0);
+        curr.vidas += Number(p.lives_count || p.total_lives || 0);
       }
     });
     return Array.from(map.values());
-  }, [deduped, period]);
+  }, [allProposals, period]);
 
   // Seller ranking
   const sellerRanking = useMemo(() => {
-    const map = new Map<string, { name: string; propostas: number; valor: number; vidas: number }>();
-    filtered.forEach(p => {
+    const map = new Map<string, { name: string; propostas: number; valor: number; vidas: number; seen: Set<string> }>();
+    filteredRaw.forEach(p => {
       const s = p.seller_name || p.sellerName || 'Desconhecido';
-      if (!map.has(s)) map.set(s, { name: s, propostas: 0, valor: 0, vidas: 0 });
+      if (!map.has(s)) map.set(s, { name: s, propostas: 0, valor: 0, vidas: 0, seen: new Set() });
       const c = map.get(s)!;
-      c.propostas++;
+      const id = p.proposal_number || p.proposalNumber;
+      if (!c.seen.has(id)) {
+        c.seen.add(id);
+        c.propostas++;
+      }
       c.valor += Number(p.total_value || 0);
-      c.vidas += Number(p.total_lives || 0);
+      c.vidas += Number(p.lives_count || p.total_lives || 0);
     });
     return Array.from(map.values()).sort((a, b) => b.valor - a.valor);
-  }, [filtered]);
+  }, [filteredRaw]);
 
   // Coverage distribution
   const coverageData = useMemo(() => {
@@ -259,11 +278,11 @@ export default function AnalyticsPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
           <KpiCard
             title="Propostas Emitidas"
-            value={filtered.length}
+            value={dedupedFiltered.length}
             sub={`${prevCount} no período anterior`}
             icon={FileText}
             color="#00995D"
-            trend={filtered.length > prevCount ? 'up' : filtered.length < prevCount ? 'down' : 'flat'}
+            trend={dedupedFiltered.length > prevCount ? 'up' : dedupedFiltered.length < prevCount ? 'down' : 'flat'}
             trendValue={trendCount ?? '—'}
           />
           <KpiCard
@@ -278,7 +297,7 @@ export default function AnalyticsPage() {
           <KpiCard
             title="Total de Vidas"
             value={totalLives}
-            sub={`Média: ${filtered.length > 0 ? (totalLives / filtered.length).toFixed(1) : 0} vidas/proposta`}
+            sub={`Média: ${dedupedFiltered.length > 0 ? (totalLives / dedupedFiltered.length).toFixed(1) : 0} vidas/proposta`}
             icon={Users}
             color="#8B5CF6"
             trend={null}
@@ -452,9 +471,9 @@ export default function AnalyticsPage() {
             <div className="space-y-3">
               {[
                 { label: 'Vendedores ativos', value: sellerRanking.length },
-                { label: 'Média de vidas/proposta', value: filtered.length > 0 ? (totalLives / filtered.length).toFixed(1) : '—' },
+                { label: 'Média de vidas/proposta', value: dedupedFiltered.length > 0 ? (totalLives / dedupedFiltered.length).toFixed(1) : '—' },
                 { label: 'Valor médio/vida', value: formatCurrency(avgValuePerLife) },
-                { label: 'Proposta de maior valor', value: formatCurrency(Math.max(...filtered.map(p => Number(p.total_value || 0)), 0)) },
+                { label: 'Proposta de maior valor', value: formatCurrency(Math.max(...filteredRaw.map(p => Number(p.total_value || 0)), 0)) },
               ].map(stat => (
                 <div key={stat.label} className="flex justify-between items-center border-b border-slate-50 pb-3">
                   <span className="text-xs font-bold text-slate-500">{stat.label}</span>

@@ -30,7 +30,9 @@ import {
   Archive,
   X,
   Trash2,
-  FolderOpen
+  FolderOpen,
+  Bell,
+  BellDot
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -39,6 +41,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { Login } from '@/components/Login';
 import { LogOut, Shield, User as UserIcon, Loader2 } from 'lucide-react';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 // --- Types ---
 interface PlanAgeGroup {
@@ -101,11 +104,26 @@ export default function UnimedProposalGenerator() {
   const previewRef = useRef<HTMLDivElement>(null);
 
   // --- Drafts / Templates / Archive ---
+  // --- Drafts / Templates / Archive ---
   const [activePanel, setActivePanel] = useState<'drafts' | 'templates' | 'archive' | null>(null);
   const [drafts, setDrafts] = useState<any[]>([]);
   const [draftName, setDraftName] = useState('');
   const [showSaveDraft, setShowSaveDraft] = useState(false);
   const [isDraftSaving, setIsDraftSaving] = useState(false);
+  const [selectedProposalDetails, setSelectedProposalDetails] = useState<any>(null);
+  const [proposalItems, setProposalItems] = useState<any[]>([]);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // Handle URL params for opening panels (notifications)
+  useEffect(() => {
+    const panel = searchParams.get('panel');
+    if (panel === 'archive') {
+      setActivePanel('archive');
+      // Limpa a URL para permitir cliques subsequentes no mesmo botão
+      router.replace('/');
+    }
+  }, [searchParams, router]);
 
   const useSupabaseDrafts = !!process.env.NEXT_PUBLIC_SUPABASE_URL && !!user;
 
@@ -470,7 +488,7 @@ export default function UnimedProposalGenerator() {
 
   const calculatePlanTotal = (plan: Plan) => {
     return plan.ageGroups.reduce((acc, group) => {
-      const discountedValue = Math.round(group.value * (1 - (data.discount / 100)));
+      const discountedValue = group.value * (1 - (data.discount / 100));
       return acc + (discountedValue * (quantities[group.label] || 0));
     }, 0);
   };
@@ -531,6 +549,11 @@ export default function UnimedProposalGenerator() {
     filteredPlans.forEach((plan: Plan) => {
       Object.entries(quantities).forEach(([ageGroup, count]: [string, number]) => {
         if (count > 0) {
+          const ageGroupData = plan.ageGroups.find(ag => ag.label === ageGroup);
+          const unitValue = ageGroupData?.value || 0;
+          const discountedUnitValue = unitValue * (1 - (data.discount / 100));
+          const rowTotalValue = discountedUnitValue * count;
+
           proposalRows.push({
             proposal_number: data.proposalNumber,
             cnpj: data.cnpj,
@@ -546,8 +569,10 @@ export default function UnimedProposalGenerator() {
             accommodation: plan.accommodation,
             age_group: ageGroup,
             lives_count: count,
-            total_lives: calculateTotalLives(),
-            total_value: plans.reduce((acc: number, p: Plan) => acc + calculatePlanTotal(p), 0)
+            total_lives: count,
+            total_value: rowTotalValue,
+            status: (data.discount > 0 && profile?.role === 'seller') ? 'pending' : 'approved',
+            requested_discount: data.discount
           });
         }
       });
@@ -565,8 +590,8 @@ export default function UnimedProposalGenerator() {
         validity_days: data.validityDays,
         discount: data.discount,
         date: format(new Date(), 'dd/MM/yyyy'),
-        total_lives: calculateTotalLives(),
-        total_value: plans.reduce((acc: number, p: Plan) => acc + calculatePlanTotal(p), 0)
+        total_lives: 0,
+        total_value: 0
       });
     }
 
@@ -644,8 +669,14 @@ export default function UnimedProposalGenerator() {
     // 2. Save last used number (resetForm will handle increment)
     localStorage.setItem('unimed_last_proposal_number', data.proposalNumber);
 
-    // 3. Abrir Modal de Impressão
-    setShowPrintModal(true);
+    // 3. Abrir Modal de Impressão ou Sucesso de Solicitação
+    if (data.discount > 0 && profile?.role === 'seller') {
+      setErrorMessage('Solicitação de desconto enviada com sucesso! Aguarde a aprovação do gerente para gerar o PDF.');
+      setIsGenerating(false);
+      resetForm();
+    } else {
+      setShowPrintModal(true);
+    }
   };
 
   const handleHeaderPrint = () => {
@@ -743,6 +774,7 @@ export default function UnimedProposalGenerator() {
               Arquivo
             </button>
           </div>
+
           <button
             onClick={resetForm}
             className="px-4 py-2 text-slate-400 hover:text-slate-600 font-bold text-sm transition-colors"
@@ -1069,11 +1101,18 @@ export default function UnimedProposalGenerator() {
                       disabled={!isStep3Complete || isGenerating}
                       className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${
                         isStep3Complete 
-                          ? 'bg-[#00995D] text-white shadow-lg shadow-[#00995D]/20 hover:scale-[1.02] active:scale-95' 
+                          ? (data.discount > 0 && profile?.role === 'seller')
+                            ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/20 hover:scale-[1.02] active:scale-95'
+                            : 'bg-[#00995D] text-white shadow-lg shadow-[#00995D]/20 hover:scale-[1.02] active:scale-95' 
                           : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                       }`}
                     >
-                      {isGenerating ? 'Gerando...' : 'Gerar Proposta Comercial'}
+                      {isGenerating 
+                        ? 'Processando...' 
+                        : (data.discount > 0 && profile?.role === 'seller')
+                          ? 'Solicitar Aprovação de Desconto'
+                          : 'Gerar Proposta Comercial'
+                      }
                       {!isGenerating && <ArrowRight size={18} />}
                     </button>
                   </div>
@@ -1600,7 +1639,7 @@ export default function UnimedProposalGenerator() {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {plan.ageGroups.map((group, idx) => {
-                          const discountedValue = Math.round(group.value * (1 - (data.discount / 100)));
+                          const discountedValue = group.value * (1 - (data.discount / 100));
                           const qty = quantities[group.label] || 0;
                           const investment = discountedValue * qty;
 
@@ -1644,7 +1683,7 @@ export default function UnimedProposalGenerator() {
                           </div>
                           <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                             <p className="text-[9px] font-bold text-slate-400 uppercase">Valor do Desconto</p>
-                            <p className="text-lg font-black text-red-500">
+                            <p className="text-lg font-black text-unimed-green">
                               - R$ {(calculateOriginalPlanTotal(plan) - calculatePlanTotal(plan)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                             </p>
                           </div>
@@ -1655,7 +1694,7 @@ export default function UnimedProposalGenerator() {
                         <p className="text-lg font-black text-unimed-green">{calculateTotalLives()}</p>
                       </div>
                       <div className="bg-unimed-green/5 p-3 rounded-xl border border-unimed-green/20">
-                        <p className="text-[9px] font-bold text-unimed-green uppercase">Total do Plano</p>
+                        <p className="text-[9px] font-bold text-unimed-green uppercase">Investimento Mensal</p>
                         <p className="text-lg font-black text-unimed-green">
                           R$ {calculatePlanTotal(plan).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </p>
@@ -1668,19 +1707,19 @@ export default function UnimedProposalGenerator() {
                       <Info className="text-unimed-green" size={18} />
                     </div>
                     <div className="space-y-1">
-                      <p className="text-[10px] font-bold text-slate-800">Custo de Coparticipação</p>
-                      <div className="grid grid-cols-3 gap-4">
+                      <p className="text-xs font-black text-slate-800 uppercase tracking-wider">Custo de Coparticipação</p>
+                      <div className="grid grid-cols-3 gap-8 mt-2">
                         <div className="flex flex-col">
-                          <span className="text-[8px] text-slate-400 uppercase">Consulta</span>
-                          <span className="text-[10px] font-bold text-slate-700">{plan.ageGroups[0].consulta}</span>
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Consulta</span>
+                          <span className="text-sm font-black text-slate-700">{plan.ageGroups[0].consulta}</span>
                         </div>
                         <div className="flex flex-col">
-                          <span className="text-[8px] text-slate-400 uppercase">Exame</span>
-                          <span className="text-[10px] font-bold text-slate-700">{plan.ageGroups[0].exame}</span>
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Exame</span>
+                          <span className="text-sm font-black text-slate-700">{plan.ageGroups[0].exame}</span>
                         </div>
                         <div className="flex flex-col">
-                          <span className="text-[8px] text-slate-400 uppercase">Franquia</span>
-                          <span className="text-[10px] font-bold text-slate-700">R$ {plan.ageGroups[0].franquia.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Franquia</span>
+                          <span className="text-sm font-black text-slate-700">R$ {plan.ageGroups[0].franquia.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                         </div>
                       </div>
                     </div>
@@ -2199,41 +2238,287 @@ export default function UnimedProposalGenerator() {
                   </div>
                 )}
 
-                {/* ---- ARCHIVE PANEL ---- */}
+                {/* ---- ARCHIVE / APPROVALS PANEL ---- */}
                 {activePanel === 'archive' && (
-                  <div className="p-6 space-y-4">
-                    {history.length === 0 ? (
-                      <div className="text-center py-12 space-y-3">
-                        <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto text-slate-300"><Archive size={24} /></div>
-                        <p className="text-sm font-bold text-slate-400">Nenhuma proposta emitida ainda.</p>
-                        <p className="text-xs text-slate-300">As propostas geradas aparecerão aqui.</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Últimas propostas emitidas ({history.length})</p>
-                        {history.map((prop: any, idx: number) => (
-                          <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2 hover:border-blue-200 hover:bg-blue-50/20 transition-all">
+                  <div className="p-6 space-y-6">
+                    {/* SEÇÃO: PENDENTES (Apenas Gerentes/Adms ou se houver pendentes do próprio vendedor) */}
+                    {history.some(p => p.status === 'pending') && (
+                      <div className="space-y-3">
+                        <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest px-1 flex items-center gap-2">
+                          <span className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+                          Aprovações Pendentes ({history.filter(p => p.status === 'pending').length})
+                        </p>
+                        {history.filter(p => p.status === 'pending').map((prop: any, idx: number) => (
+                          <div key={idx} className="bg-amber-50/50 border border-amber-100 rounded-2xl p-4 space-y-3">
                             <div className="flex items-center justify-between">
-                              <span className="text-sm font-black text-[#00995D]">#{prop.proposalNumber || prop.proposal_number}</span>
-                              <span className="text-[10px] font-bold bg-green-50 text-green-600 px-2 py-0.5 rounded-full uppercase">Emitida</span>
+                              <span className="text-sm font-black text-amber-600">#{prop.proposalNumber || prop.proposal_number}</span>
+                              <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full uppercase">Aguardando</span>
                             </div>
-                            <p className="text-sm font-bold text-slate-800 leading-tight">{prop.companyName || prop.company_name || 'Sem nome'}</p>
-                            <p className="text-[10px] font-bold text-slate-400">{prop.sellerName || prop.seller_name || '---'} · {prop.date || new Date(prop.created_at).toLocaleDateString('pt-BR')}</p>
-                            <div className="flex items-center justify-between border-t border-slate-50 pt-2">
-                              <span className="text-[10px] font-black text-slate-400 uppercase">{prop.totalLives || prop.total_lives || 0} vidas</span>
-                              <span className="text-sm font-black text-slate-900">
-                                {formatCurrencyShort(Number(prop.totalValue || prop.total_value || 0))}
-                              </span>
+                            <div>
+                              <p className="text-sm font-bold text-slate-800 leading-tight">{prop.companyName || prop.company_name}</p>
+                              <p className="text-[10px] font-medium text-slate-500 mt-1">{prop.sellerName || prop.seller_name} · {prop.requested_discount}% de desconto</p>
                             </div>
+                            
+                            <button
+                              onClick={async () => {
+                                // Buscar todos os itens dessa proposta
+                                const { data: items } = await supabase
+                                  .from('proposals')
+                                  .select('*')
+                                  .eq('proposal_number', prop.proposal_number);
+                                setProposalItems(items || []);
+                                setSelectedProposalDetails(prop);
+                              }}
+                              className="w-full py-2.5 bg-white border border-amber-200 text-amber-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 transition-all flex items-center justify-center gap-2"
+                            >
+                              <Search size={14} />
+                              Ver Detalhes para Aprovar
+                            </button>
                           </div>
                         ))}
                       </div>
                     )}
+
+                    {/* SEÇÃO: LIBERADAS (Apenas para o Seller ver que o gestor aprovou) */}
+                    {history.some(p => p.status === 'manager_approved') && (
+                      <div className="space-y-3">
+                        <p className="text-[10px] font-black text-[#00995D] uppercase tracking-widest px-1 flex items-center gap-2">
+                          <ShieldCheck size={14} />
+                          Propostas Liberadas ({history.filter(p => p.status === 'manager_approved').length})
+                        </p>
+                        {history.filter(p => p.status === 'manager_approved').map((prop: any, idx: number) => (
+                          <div key={idx} className="bg-green-50/50 border border-green-100 rounded-2xl p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-black text-[#00995D]">#{prop.proposalNumber || prop.proposal_number}</span>
+                              <span className="text-[10px] font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded-full uppercase">Liberada</span>
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-slate-800 leading-tight">{prop.companyName || prop.company_name}</p>
+                              <p className="text-[10px] font-medium text-slate-500 mt-1">Aprovada pelo Gestor</p>
+                            </div>
+                            
+                            <button
+                              onClick={async () => {
+                                // Finalizar e Gerar PDF
+                                const { error } = await supabase.from('proposals').update({ status: 'approved' }).eq('proposal_number', prop.proposal_number);
+                                if (!error) {
+                                  setData({
+                                    proposalNumber: prop.proposal_number,
+                                    cnpj: prop.cnpj,
+                                    companyName: prop.company_name,
+                                    responsible: prop.responsible,
+                                    sellerName: prop.seller_name,
+                                    seller_id: prop.seller_id,
+                                    validityDays: prop.validity_days,
+                                    discount: prop.discount || prop.requested_discount || 0
+                                  });
+                                  setShowPrintModal(true);
+                                  setActivePanel(null);
+                                }
+                              }}
+                              className="w-full py-2.5 bg-[#00995D] text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-[#007D4C] shadow-md shadow-[#00995D]/10 transition-all flex items-center justify-center gap-2"
+                            >
+                              <Printer size={14} />
+                              Finalizar e Gerar PDF
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* SEÇÃO: HISTÓRICO (Propostas aprovadas/negadas) */}
+                    <div className="space-y-3">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">
+                        Histórico de Propostas ({history.filter(p => !['pending', 'manager_approved'].includes(p.status)).length})
+                      </p>
+                      {history.filter(p => !['pending', 'manager_approved'].includes(p.status)).length === 0 ? (
+                        <div className="text-center py-8 border-2 border-dashed border-slate-100 rounded-3xl">
+                          <p className="text-xs font-bold text-slate-300 uppercase tracking-widest">Nenhum histórico</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {history.filter(p => !['pending', 'manager_approved'].includes(p.status)).map((prop: any, idx: number) => (
+                            <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2 hover:border-blue-200 hover:bg-blue-50/20 transition-all group">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-black text-slate-400">#{prop.proposalNumber || prop.proposal_number}</span>
+                                {prop.status === 'approved' ? (
+                                  <span className="text-[9px] font-bold bg-green-50 text-green-600 px-2 py-0.5 rounded-full uppercase">Finalizada</span>
+                                ) : (
+                                  <span className="text-[9px] font-bold bg-red-50 text-red-600 px-2 py-0.5 rounded-full uppercase">Negada</span>
+                                )}
+                              </div>
+                              <p className="text-sm font-bold text-slate-800 leading-tight">{prop.companyName || prop.company_name || 'Sem nome'}</p>
+                              <p className="text-[10px] font-bold text-slate-400">{prop.sellerName || prop.seller_name || '---'} · {prop.date || new Date(prop.created_at).toLocaleDateString('pt-BR')}</p>
+                              <div className="flex items-center justify-between border-t border-slate-50 pt-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                                <span className="text-[10px] font-black text-slate-400 uppercase">{prop.totalLives || prop.total_lives || 0} vidas</span>
+                                <span className="text-sm font-black text-slate-900">
+                                  {formatCurrencyShort(Number(prop.totalValue || prop.total_value || 0))}
+                                </span>
+                              </div>
+
+                              {prop.status === 'approved' && (
+                                <button 
+                                  onClick={() => {
+                                    setData({
+                                      proposalNumber: prop.proposal_number,
+                                      cnpj: prop.cnpj,
+                                      companyName: prop.company_name,
+                                      responsible: prop.responsible,
+                                      sellerName: prop.seller_name,
+                                      seller_id: prop.seller_id,
+                                      validityDays: prop.validity_days,
+                                      discount: prop.discount || prop.requested_discount || 0
+                                    });
+                                    setShowPrintModal(true);
+                                    setActivePanel(null);
+                                  }}
+                                  className="w-full mt-2 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-slate-800 transition-all"
+                                >
+                                  <Printer size={12} />
+                                  Gerar PDF
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Detalhes da Proposta (Visualização Gerencial Compacta) */}
+      <AnimatePresence>
+        {selectedProposalDetails && (
+          <div className="fixed inset-0 z-[11000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm no-print">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-[32px] shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col relative"
+            >
+              {/* Header Modal Compacto */}
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-500">
+                    <Search size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-slate-800 leading-tight">Revisar Proposta</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nº {selectedProposalDetails.proposal_number}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedProposalDetails(null)}
+                  className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 transition-all shadow-sm"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Body Modal Compacto */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-5">
+                {/* Dados da Empresa */}
+                <div className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 grid grid-cols-2 gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Empresa</p>
+                    <p className="text-xs font-bold text-slate-800 truncate">{selectedProposalDetails.company_name}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CNPJ</p>
+                    <p className="text-xs font-bold text-slate-800">{selectedProposalDetails.cnpj}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Vendedor</p>
+                    <p className="text-xs font-bold text-slate-800 truncate">{selectedProposalDetails.seller_name}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Validade</p>
+                    <p className="text-xs font-bold text-slate-800">{selectedProposalDetails.validity_days} dias</p>
+                  </div>
+                </div>
+
+                {/* Configuração do Plano */}
+                <div className="flex gap-3">
+                  <div className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-xl flex-1">
+                    <p className="text-[8px] font-bold text-blue-400 uppercase">Abrangência</p>
+                    <p className="text-[11px] font-black text-blue-700 leading-tight">{Array.from(new Set(proposalItems.map(i => i.coverage))).join(' / ') || '---'}</p>
+                  </div>
+                  <div className="bg-purple-50 border border-purple-100 px-3 py-2 rounded-xl flex-1">
+                    <p className="text-[8px] font-bold text-purple-400 uppercase">Acomodação</p>
+                    <p className="text-[11px] font-black text-purple-700 leading-tight">{Array.from(new Set(proposalItems.map(i => i.accommodation))).join(' / ') || '---'}</p>
+                  </div>
+                </div>
+
+                {/* Distribuição de Vidas Compacta */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center px-1">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Distribuição de Vidas</p>
+                    <span className="text-[10px] font-black text-unimed-green bg-green-50 px-2 py-0.5 rounded-full">{selectedProposalDetails.total_lives} vidas</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {proposalItems.filter(item => item.lives_count > 0).map((item, i) => (
+                      <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-100 text-[10px]">
+                        <span className="font-medium text-slate-500 truncate mr-2">{item.age_group}</span>
+                        <span className="font-black text-slate-800">{item.lives_count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Resumo Financeiro Compacto */}
+                <div className="bg-[#00995D] rounded-2xl p-5 text-white flex justify-between items-center relative overflow-hidden">
+                  <div className="relative z-10 space-y-0.5">
+                    <p className="text-[8px] font-black text-white/60 uppercase tracking-widest">Valor Final</p>
+                    <p className="text-xl font-black">{formatCurrencyShort(Number(selectedProposalDetails.total_value))}</p>
+                  </div>
+                  <div className="relative z-10 text-right space-y-0.5">
+                    <p className="text-[8px] font-black text-white/60 uppercase tracking-widest">Desconto</p>
+                    <p className="text-lg font-black text-amber-300">{selectedProposalDetails.requested_discount}%</p>
+                  </div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-2xl" />
+                </div>
+              </div>
+
+              {/* Footer Modal com botões menores */}
+              {(profile?.role === 'manager' || profile?.role === 'admin') && (
+                <div className="p-4 border-t border-slate-100 flex gap-3 bg-slate-50/50">
+                  <button
+                    onClick={async () => {
+                      const { error } = await supabase.from('proposals').update({ status: 'rejected' }).eq('proposal_number', selectedProposalDetails.proposal_number);
+                      if (!error) {
+                        setSelectedProposalDetails(null);
+                        window.location.reload();
+                      }
+                    }}
+                    className="flex-1 py-2.5 bg-white border border-red-100 text-red-500 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-red-50 transition-all"
+                  >
+                    Negar
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const { error } = await supabase.from('proposals').update({ 
+                        status: 'manager_approved', 
+                        approved_by: profile.id, 
+                        approved_at: new Date().toISOString() 
+                      }).eq('proposal_number', selectedProposalDetails.proposal_number);
+                      if (!error) {
+                        setSelectedProposalDetails(null);
+                        window.location.reload();
+                      }
+                    }}
+                    className="flex-2 py-2.5 bg-[#00995D] text-white rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-[#007D4C] shadow-md shadow-[#00995D]/10 transition-all"
+                  >
+                    Aprovar Proposta
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

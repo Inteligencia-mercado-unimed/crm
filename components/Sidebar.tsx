@@ -11,11 +11,12 @@ import {
   Settings, 
   LogOut,
   Plus,
-  Shield
+  Shield,
+  Bell
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
-export function Sidebar() {
+export function Sidebar({ pendingCount = 0 }: { pendingCount?: number }) {
   const pathname = usePathname();
   const { signOut, profile } = useAuth();
 
@@ -29,16 +30,14 @@ export function Sidebar() {
 
   return (
     <aside className="w-64 bg-white border-r border-slate-200 flex flex-col h-screen sticky top-0 shrink-0 no-print">
-      <div className="p-6">
-        <div className="flex items-center gap-2 mb-1">
-          <div className="bg-[#00995D] p-1.5 rounded-lg text-white">
-            <Shield size={20} />
-          </div>
-          <h1 className="text-xl font-bold text-slate-800 tracking-tight">CRM Admin</h1>
+      <div className="px-6 py-8 flex items-start border-b border-slate-50">
+        <div className="w-full max-w-[190px] h-14 flex items-center justify-start">
+          <img 
+            src="https://i.ibb.co/prXyPX74/Logo-Nova-Unimed-CR.png" 
+            alt="Unimed Centro Rondônia" 
+            className="w-full h-full object-contain object-left"
+          />
         </div>
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">
-          Insurance Lead
-        </p>
       </div>
 
       <nav className="flex-1 px-4 space-y-1 overflow-y-auto pt-2">
@@ -72,14 +71,27 @@ export function Sidebar() {
 
         <div className="pt-4 border-t border-slate-100 space-y-1">
           {profile && (
-            <div className="px-4 py-3 flex items-center gap-3 mb-2">
-              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-500">
-                {profile.full_name?.substring(0, 2).toUpperCase()}
+            <div className="px-4 py-3 flex items-center justify-between mb-2">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-500 shrink-0">
+                  {profile.full_name?.substring(0, 2).toUpperCase()}
+                </div>
+                <div className="overflow-hidden">
+                  <p className="text-xs font-bold text-slate-700 truncate">{profile.full_name}</p>
+                  <p className="text-[10px] text-slate-400 uppercase font-bold">{profile.role}</p>
+                </div>
               </div>
-              <div className="overflow-hidden">
-                <p className="text-xs font-bold text-slate-700 truncate">{profile.full_name}</p>
-                <p className="text-[10px] text-slate-400 uppercase font-bold">{profile.role}</p>
-              </div>
+
+              {profile && (
+                <Link href="/?panel=archive" className="relative p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-all">
+                  <Bell size={18} />
+                  {pendingCount > 0 && (
+                    <span className={`absolute top-1 right-1 w-4 h-4 text-white text-[9px] font-black rounded-full flex items-center justify-center border-2 border-white shadow-sm ${profile.role === 'seller' ? 'bg-[#00995D]' : 'bg-red-500'}`}>
+                      {pendingCount}
+                    </span>
+                  )}
+                </Link>
+              )}
             </div>
           )}
           

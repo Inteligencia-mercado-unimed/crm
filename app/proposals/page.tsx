@@ -52,17 +52,22 @@ function ProposalsContent() {
 
         if (!error && data) {
           setAllRows(data);
-          // Group by proposal number for main list
-          const uniqueProposalsList: any[] = [];
-          const seen = new Set();
+          // Group by proposal number for main list and sum values
+          const proposalsMap = new Map();
           (data as any[]).forEach((p: any) => {
             const id = p.proposal_number || p.proposalNumber;
-            if (!seen.has(id)) {
-              seen.add(id);
-              uniqueProposalsList.push(p);
+            if (!proposalsMap.has(id)) {
+              proposalsMap.set(id, { 
+                ...p, 
+                total_value: 0, 
+                total_lives: 0 
+              });
             }
+            const current = proposalsMap.get(id);
+            current.total_value += Number(p.total_value || p.totalValue || 0);
+            current.total_lives += Number(p.lives_count || p.total_lives || p.totalLives || 0);
           });
-          setProposals(uniqueProposalsList);
+          setProposals(Array.from(proposalsMap.values()));
         }
       } else {
         const localHistory = JSON.parse(localStorage.getItem('unimed_proposals_history') || '[]');
@@ -442,6 +447,7 @@ function ProposalsContent() {
                                               <th className="px-6 py-3">Acomodação</th>
                                               <th className="px-6 py-3">Faixa Etária</th>
                                               <th className="px-6 py-3 text-center">Vidas</th>
+                                              <th className="px-6 py-3 text-right">Valor</th>
                                             </tr>
                                           </thead>
                                           <tbody className="divide-y divide-slate-50">
@@ -460,6 +466,9 @@ function ProposalsContent() {
                                                   <span className="bg-slate-100 px-2 py-1 rounded-md font-black text-slate-700">
                                                     {detail.lives_count || 1}
                                                   </span>
+                                                </td>
+                                                <td className="px-6 py-3 text-right font-bold text-slate-900">
+                                                  {formatCurrency(detail.total_value || detail.totalValue || 0)}
                                                 </td>
                                               </tr>
                                             ))}

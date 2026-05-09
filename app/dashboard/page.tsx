@@ -56,19 +56,33 @@ export default function DashboardPage() {
   
   proposals.forEach((p: any) => {
     const proposalId = p.proposal_number || p.proposalNumber;
+    
+    // Identificar o vendedor para agrupar estatísticas por vendedor
+    const seller = p.seller_name || p.sellerName || 'Desconhecido';
+    if (!proposalsBySellerMap.has(seller)) {
+      proposalsBySellerMap.set(seller, { name: seller, propostas: 0, valor: 0, vidas: 0, seenProposals: new Set() });
+    }
+    const sellerStats = proposalsBySellerMap.get(seller);
+    
+    // Incrementar valor e vidas para toda linha
+    sellerStats.valor += Number(p.total_value || p.totalValue || 0);
+    sellerStats.vidas += Number(p.lives_count || p.total_lives || p.totalLives || 0);
+
     if (!uniqueProposals.has(proposalId)) {
       uniqueProposals.add(proposalId);
-      uniqueProposalsList.push(p);
       
-      const seller = p.seller_name || p.sellerName || 'Desconhecido';
-      if (!proposalsBySellerMap.has(seller)) {
-        proposalsBySellerMap.set(seller, { name: seller, propostas: 0, valor: 0, vidas: 0 });
-      }
-      
-      const current = proposalsBySellerMap.get(seller);
-      current.propostas += 1;
-      current.valor += Number(p.total_value || p.totalValue || 0);
-      current.vidas += Number(p.total_lives || p.totalLives || 0);
+      // Para o uniqueProposalsList, ainda queremos um objeto base, mas com valores somados
+      // Mas para o resumo do histórico, talvez queiramos o total da proposta
+      // Vamos criar um mapa de propostas únicas com totais
+      uniqueProposalsList.push({ ...p, total_value: 0, total_lives: 0 });
+      sellerStats.propostas += 1;
+    }
+
+    // Atualizar o total no uniqueProposalsList
+    const propInList = uniqueProposalsList.find(up => (up.proposal_number || up.proposalNumber) === proposalId);
+    if (propInList) {
+      propInList.total_value = (propInList.total_value || 0) + Number(p.total_value || 0);
+      propInList.total_lives = (propInList.total_lives || 0) + Number(p.lives_count || p.total_lives || 0);
     }
   });
 
